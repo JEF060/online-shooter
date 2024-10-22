@@ -12,7 +12,7 @@ export default class Entity {
         lookTarget = {x: 0, y: 0},
         lookForce = 0,
         radius = 0,
-        pushForce = 0,
+        pushForce = 1,
         mass = 1,
         id,
         colorSpace = 'oklch',
