@@ -31,7 +31,7 @@ let oldTimeStamp = 0;
 var pressedKeys = {};
 
 //Used for sending input changes to server
-const INPUT_UPDATES_PER_SEC = 30;
+const INPUT_UPDATES_PER_SEC = 40;
 const INPUT_UPDATE_INTERVAL = 1 / INPUT_UPDATES_PER_SEC;
 let inputUpdates = {};
 let inputUpdateTimer = 0;
