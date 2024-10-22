@@ -1,0 +1,9 @@
+{
+    "name": "online-shooter",
+    "version": "0.0.1",
+    "type": "module",
+    "dependencies": {
+        "express": "^4.21.1",
+        "socket.io": "^4.8.0"
+    }
+}

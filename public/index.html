@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>online-shooter</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <canvas></canvas>
+
+    <div id="play-interface">
+      <div id="gamemode-group">
+        <label id="gamemode-label" class="rounded-panel">Gamemode:</label>
+        <select
+          name="gamemode-select"
+          id="gamemode-select"
+          class="rounded-panel"
+        >
+          <option value="room1">Room 1</option>
+          <option value="room2">Room 2</option>
+          <option value="room3">Room 3</option>
+        </select>
+      </div>
+      <button id="play-button" class="rounded-panel">Play</button>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://colorjs.io/dist/color.global.js"></script>
+    <script type="module" src="client.js"></script>
+  </body>
+</html>
