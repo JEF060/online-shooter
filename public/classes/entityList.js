@@ -49,6 +49,9 @@ export default class EntityList {
             const id = arr[i][0];
             const entityData = arr[i][1]
 
+            //The client-side entities need their polygon for rendering
+            entityData.constructPolygon = true;
+
             if (!this.#entities.has(id)) {
                 this.#entities.set(id, new Entity(entityData));
             } else {

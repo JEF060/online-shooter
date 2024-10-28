@@ -1,3 +1,5 @@
+import Polygon from "./polygon.js";
+
 export default class Entity {
     constructor({
         position = { x: 0, y: 0 },
@@ -15,6 +17,8 @@ export default class Entity {
         pushForce = 1,
         mass = 1,
         id,
+        points = [],
+        constructPolygon = false,
         colorSpace = 'oklch',
         color = {col: [0, 0, 0], a: 1},
         outlineColor = {col: [0, 0, 0], a: 1},
@@ -36,6 +40,14 @@ export default class Entity {
         this.radius = radius;
         this.pushForce = pushForce;
         this.mass = mass;
+
+        //Points trace out the polygon that will be drawn when draw function is called
+        this.points = points;
+        this.polygon = null;
+
+        //If there are no points then simply use a basic circle and don't construct a polygon
+        //constructPolygon flag is used because the server doesn't need to create a polygon object because the server never renders anything
+        if (this.points.length > 0 && constructPolygon) this.polygon = new Polygon({points: this.points, colorSpace: this.colorSpace, color: this.color, outlineColor: this.outlineColor, outlineThickness: this.outlineThickness});
 
         this.colorSpace = colorSpace;
         this.color = color;
@@ -150,23 +162,35 @@ export default class Entity {
     }
 
     draw(ctx, camera) {
-        ctx.fillStyle   = new Color(this.colorSpace, this.color.col, this.color.a);
-        ctx.strokeStyle = new Color(this.colorSpace, this.outlineColor.col, this.outlineColor.a);
-        ctx.lineWidth   = this.outlineThickness * camera.zoom;
 
-        const adjustedPosition = camera.worldToScreen(this.position);
-        const adjustedRadius = this.radius * camera.zoom;
+        const color = new Color(this.colorSpace, this.color.col, this.color.a);
+        const outlineColor = new Color(this.colorSpace, this.outlineColor.col, this.outlineColor.a);
 
-        ctx.beginPath();
-        ctx.arc(adjustedPosition.x, adjustedPosition.y, adjustedRadius, 0, Math.PI * 2, false);
-        ctx.fill();
-        ctx.stroke();
-        ctx.closePath();
+        if (this.polygon) {
 
-        ctx.beginPath();
-        ctx.moveTo(adjustedPosition.x, adjustedPosition.y);
-        ctx.lineTo(adjustedPosition.x + adjustedRadius * Math.cos(this.rotation), adjustedPosition.y + adjustedRadius * Math.sin(this.rotation));
-        ctx.stroke();
-        ctx.closePath();
+            this.polygon.draw({ctx: ctx, camera: camera, pos: this.position, rot: this.rotation, color: color, outlineColor: outlineColor});
+
+        } else {
+
+            ctx.fillStyle = color;
+            ctx.strokeStyle = outlineColor;
+            ctx.lineWidth = this.outlineThickness * camera.zoom;
+    
+            const adjustedPosition = camera.worldToScreen(this.position);
+            const adjustedRadius = this.radius * camera.zoom;
+    
+            ctx.beginPath();
+            ctx.arc(adjustedPosition.x, adjustedPosition.y, adjustedRadius, 0, Math.PI * 2, false);
+            ctx.fill();
+            ctx.stroke();
+            ctx.closePath();
+    
+            ctx.beginPath();
+            ctx.moveTo(adjustedPosition.x, adjustedPosition.y);
+            ctx.lineTo(adjustedPosition.x + adjustedRadius * Math.cos(this.rotation), adjustedPosition.y + adjustedRadius * Math.sin(this.rotation));
+            ctx.stroke();
+            ctx.closePath();
+
+        }
     }
 }

@@ -1,5 +1,6 @@
 import Entity from '../public/classes/entity.js';
 import EntityList from '../public/classes/entityList.js';
+import Polygon from '../public/classes/polygon.js';
 
 console.log();
 console.log('-----------------------');
@@ -55,7 +56,9 @@ io.on('connection', (socket) => {
         if (!rooms.has(roomToJoin)) rooms.set(roomToJoin, new EntityList());
 
         //Create an entity for the player and add it to the room
-        const playerEntity = new Entity({id: id, radius: 32, linearDrag: 10, rotationalDrag: 40, lookForce: 700, color: {col: [.71, 0.14, 240], a: 1}, outlineColor: {col: [.45, 0.14, 240], a: 1}, outlineThickness: 4});
+        const radius = 32;
+        const points = Polygon.createRegularPolygon({sides: 5, radius: radius});
+        const playerEntity = new Entity({id: id, radius: radius, points: points, linearDrag: 10, rotationalDrag: 40, lookForce: 700, color: {col: [.71, 0.14, 240], a: 1}, outlineColor: {col: [.45, 0.14, 240], a: 1}, outlineThickness: 4});
         rooms.get(roomToJoin).set(id, playerEntity);
 
         socket.emit('room joined', { room: roomToJoin }); //Used to update the specific client that requested to join
