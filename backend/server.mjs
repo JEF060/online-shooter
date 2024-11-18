@@ -1,6 +1,7 @@
-import Entity from '../public/classes/entity.js';
-import EntityList from '../public/classes/entityList.js';
-import Polygon from '../public/classes/polygon.js';
+import EntityTemplates from '../public/entityTemplates.js';
+import Entity          from '../public/classes/entity.js';
+import Room            from '../public/classes/room.js';
+import Polygon         from '../public/classes/polygon.js';
 
 console.log();
 console.log('-----------------------');
@@ -8,105 +9,117 @@ console.log('| Server Initializing |');
 console.log('-----------------------');
 console.log();
 
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import {fileURLToPath} from 'url';
+import {dirname} from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 //Socket.io setup
+//-----------------------------------------------------------------------
 import express from 'express'
 const app = express();
 import http from 'http'
 const server = http.createServer(app);
 import { Server } from 'socket.io'
-const io = new Server(server, { pingInterval: 2000, pingTimeout: 5000 });
+const io = new Server(server, {pingInterval: 10000, pingTimeout: 20000});
 app.use(express.static(__dirname + '/../public'));
 app.get('/', (req, res) => {
     res.sendFile(__dirname + 'index.html');
 });
+//-----------------------------------------------------------------------
 
-//Used for validation so clients can't join rooms that shouldn't exist
-const validRooms = ['room1', 'room2', 'room3'];
+const LISTEN_PORT = 3000;
+const TICKS_PER_SECOND = 60;
+const TICKS_PER_CLIENT_UPDATE = 3;
+const TICK_INTERVAL = 1 / TICKS_PER_SECOND;
+const ENTITY_TEMPLATES = EntityTemplates.templates;
+const SHAPE_TEMPLATES = ENTITY_TEMPLATES.shapes;
+const VALID_ROOM_IDS = ['room1', 'room2', 'room3']; //Used for validation so clients can't join rooms that shouldn't exist
+const ROOM_SIZE = 4096;
 
-//Stores all users and their current room for easy lookup
-//This is used instead of socket.rooms because socket.rooms can have multiple rooms, which is unwanted
-//Key: user id, Value: user information { room }
-const users = new Map();
+const users = new Map(); //Map {Key: user id, Value: user information {roomID, canvasSize: {x, y}}}
+const rooms = new Map(); //Map {Key: room id, Value: room object}
 
-//This is used to keep track of the entities in each room
-//Key: room name, Value: room contents { Key: user id, Value: entity}
-const rooms = new Map();
+let ticksSinceClientUpdate = 0;
+let lastTime = process.hrtime();
 
+//Server listens for connections on a specified port
+server.listen(LISTEN_PORT, () => {
+    console.log('listening on port ' + LISTEN_PORT);
+});
 
 //Fired when a new user connects to the server
 io.on('connection', (socket) => {
-    const id = socket.id; //ID of the current user
-    users.set(id, {room: null}); //When users join they aren't in any room yet
+    const userID = socket.id; //ID of the current user
+    users.set(userID, {roomID: null, canvasSize: {x: 0, y: 0}});
 
-    console.log(id + ' connected');
+    console.log(userID + ' connected');
 
-    //Fired when an existing user presses play to join the game
-    socket.on('request join room', (roomToJoin) => {
-        if (!validRooms.includes(roomToJoin)) return; //Validates room join request
+    //Used for calculating ping
+    socket.on('ping', (callback) => {callback();});
 
-        socket.join(roomToJoin); //Moves their socket to corresponding socket.io room
-        users.set(id, {room: roomToJoin}); //Update their room
+    socket.on('request join room', (joinRoomID) => {
+        if (!VALID_ROOM_IDS.includes(joinRoomID)) return;
 
-        //If the room the user wishes to join doesn't exist yet, then it is created
-        if (!rooms.has(roomToJoin)) rooms.set(roomToJoin, new EntityList());
+        socket.join(joinRoomID); //Moves their socket to corresponding socket.io room
+        users.get(userID).roomID = joinRoomID; //Update their room in user data
+
+        if (!rooms.has(joinRoomID))
+            createNewRoom(joinRoomID);
 
         //Create an entity for the player and add it to the room
-        const radius = 32;
-        const points = Polygon.createRegularPolygon({sides: 5, radius: radius});
-        const playerEntity = new Entity({id: id, radius: radius, points: points, linearDrag: 10, rotationalDrag: 40, lookForce: 700, color: {col: [.71, 0.14, 240], a: 1}, outlineColor: {col: [.45, 0.14, 240], a: 1}, outlineThickness: 4});
-        rooms.get(roomToJoin).set(id, playerEntity);
+        const playerEntity = new Entity({type: Entity.types.PLAYER, onServer: true, id: userID, baseRadius: 24, maxHealth: 999, healthRegenSpeed: 999, healthRegenDelay: 0, contactDamage: 1, linearDrag: 10, rotationalDrag: 40, lookForce: 700, colorVals: {col: [.71, 0.14, 240], a: 1}, outlineColVals: {col: [.45, 0.14, 240], a: 1}, outlineThickness: 4});
+        rooms.get(joinRoomID).addEntity(playerEntity);
 
-        socket.emit('room joined', { room: roomToJoin }); //Used to update the specific client that requested to join
-        socket.emit('client update', rooms.get(roomToJoin).toArray()); //Syncs entire room state
-
-        console.log(id + ' joined ' + roomToJoin);
+        socket.emit('room joined', joinRoomID); //Used to send verification back to the specific client that requested to join
+        console.log(userID + ' joined ' + joinRoomID);
     });
 
-    //Fired when a user disconnects from the server
     socket.on('disconnect', () => {
 
         //If the user was in a room, then they are removed from that room
-        if (users.get(id).room) {
-            const room = users.get(id).room;
+        if (users.get(userID).roomID) {
+            const roomID = users.get(userID).roomID;
+            const room = rooms.get(roomID);
 
             socket.emit('room left');
+            socket.leave(roomID); //Removes their socket from the socket.io room
 
-            socket.leave(room); //Removes their socket from the socket.io room
-            rooms.get(room).delete(id);
+            room.killPlayer(userID)
 
-            //If after being removed the room is empty, the room is deleted
-            if (rooms.get(room).getSize() == 0) rooms.delete(room);
+            if (room.getNumberOfPlayers() <= 0) {
+                rooms.delete(roomID);
+                console.log('Deleted room \'' + roomID + '\'');
+            }
         }
         
-        users.delete(id);
-
-        console.log(id + ' disconnected');
+        users.delete(userID);
+        console.log(userID + ' disconnected');
     });
 
     socket.on('update input', (inputUpdates) => {
 
-        //If the user isn't in a room then we don't want to consider their input
-        if (!users.get(id).room) return;
+        if (!users.has(userID)) return;
+        const roomID = users.get(userID).roomID;
 
-        const playerEntity = rooms.get(users.get(id).room).get(id);
+        if (!rooms.has(roomID)) return;
+        const room = rooms.get(roomID);
+
+        if (!room.hasEntity(userID)) return;
+        const playerEntity = room.getEntity(userID);
 
         //Wasd input
         if (inputUpdates.x != null && inputUpdates.y != null) {
 
             //Normalizes input to prevent cheating
-            if (inputUpdates.x != 0 && inputUpdates.y != 0) {
-                const inputMag = Math.sqrt(inputUpdates.x * inputUpdates.x + inputUpdates.y * inputUpdates.y);
+            const inputMag = Math.sqrt(inputUpdates.x * inputUpdates.x + inputUpdates.y * inputUpdates.y);
+            if (inputMag != 0) {
                 inputUpdates.x /= inputMag;
                 inputUpdates.y /= inputMag;
             }
 
-            playerEntity.acceleration.x = inputUpdates.x * 5000;
-            playerEntity.acceleration.y = inputUpdates.y * 5000;
+            playerEntity.acceleration.x = inputUpdates.x * Entity.PLAYER_BASE_SPEED;
+            playerEntity.acceleration.y = inputUpdates.y * Entity.PLAYER_BASE_SPEED;
         }
 
         //Mouse position input (influences rotation)
@@ -114,30 +127,34 @@ io.on('connection', (socket) => {
             playerEntity.lookTarget = {x: inputUpdates.mouseWorldPosX, y: inputUpdates.mouseWorldPosY};
         }
     });
+
+    socket.on('resize canvas', (canvasSize) => {
+        users.get(userID).canvasSize = canvasSize;
+    });
 });
 
-server.listen(3000, () => {
-    console.log('listening on *:3000');
-});
-
-function update(dT) {
-    for (const entityList of rooms.values()) {
-        entityList.updateEntities(dT);
+function update(deltaTime) {
+    for (const room of rooms.values()) {
+        room.updateEntities(deltaTime, users);
     }
 }
 
 function updateClients() {
-    for (const [room, entityList] of rooms.entries()) {
-        //Socket.io emits use JSON.stringify to compress data, but javascript maps can't be turned into json, so we turn it into an array
-        io.to(room).emit('client update', entityList.toArray());
+
+    //Iterate over each user
+    for (const [userId, userInfo] of users.entries()) {
+
+        //Verify user is in a room
+        if (!userInfo.roomID) return;
+        const roomID = userInfo.roomID;
+
+        //Verify room exists
+        if (!rooms.has(roomID)) return;
+        const room = rooms.get(roomID);
+
+        io.to(userId).emit('client update', {entities: Room.toArray(room.getEntitiesInViewportOfPlayer(userId)), roomSize: room.size});
     }
 }
-
-const TICK_INTERVAL = 0.015;
-const CLIENT_UDPATES_PER_SEC = 20;
-let clientUpdateAccumulator = 0;
-
-let lastTime = process.hrtime();
 
 function tick() {
     const currentTime = process.hrtime();
@@ -147,17 +164,42 @@ function tick() {
     
         update(deltaTime);
     
-        clientUpdateAccumulator += deltaTime;
+        ticksSinceClientUpdate++;
     
-        if (clientUpdateAccumulator >= 1 / CLIENT_UDPATES_PER_SEC) {
+        if (ticksSinceClientUpdate >= TICKS_PER_CLIENT_UPDATE) {
             updateClients();
-            clientUpdateAccumulator = 0;
+            ticksSinceClientUpdate = 0;
         }
       
         lastTime = currentTime;
     }
 
     setImmediate(tick);
+}
+
+//Gets a random attribute from an object
+function getRandomAttribute(obj) {
+    const keys = Object.keys(obj);
+    const randomIndex = Math.floor(Math.random() * keys.length);
+    const randomKey = keys[randomIndex];
+    return {key: randomKey, value: obj[randomKey]};
+}
+
+//Sets up a new room and populates it with shapes
+function createNewRoom(id) {
+    const room = new Room({onServer: true, size: ROOM_SIZE});
+
+    for (let i = 0; i < 200; i++) {
+        let shapeData = getRandomAttribute(SHAPE_TEMPLATES).value;
+        const points = Polygon.createRegularPolygon({sides: shapeData.sides, radius: shapeData.baseRadius, rotationalVelocity: Math.random() * 2 - 1, });
+        shapeData = Object.assign({}, shapeData, {type: Entity.types.SHAPE, contactDamage: 10, healthRegenDelay: 0.5, onServer: true, position: {x: Math.random() * room.size - room.size / 2, y: Math.random() * room.size - room.size / 2}, rotation: Math.random() * 6.28, rotationalVelocity: Math.random() * 2 - 1, points: points, outlineThickness: 4});
+        const shape = new Entity(shapeData);
+
+        room.addEntity(shape);
+    }
+
+    console.log('Created room \'' + id + '\'');
+    rooms.set(id, room);
 }
   
 tick();

@@ -1,5 +1,7 @@
-import EntityList from "./classes/entityList.js";
+import Room from "./classes/room.js";
 import Camera from "./classes/camera.js";
+import Queue from "./classes/queue.js"
+import Entity from "./classes/entity.js";
 
 const socket = io();
 
@@ -8,14 +10,21 @@ const play_button = document.getElementById('play-button');
 const gamemode_select = document.getElementById('gamemode-select');
 const playInterfaceDisplay = play_interface.style.display; //Used to show UI when user leaves room
 
-let localRoom = null; //The room the client is currently in; null means no room
-let localEntityList = new EntityList(); //Keeps track of all the players in the same room as the client
-let localPlayer = null;
+const fpsText = document.getElementById('fps');
+const pingText = document.getElementById('ping');
+const playersText = document.getElementById('players');
+const entitiesText = document.getElementById('entities');
+
+let localRoomID = null; //The room the client is currently in; null means no room
+let localRoom = new Room(); //Keeps track of all the players in the same room as the client
+let localPlayerEntity = null;
 
 //Used for drawing to screen
 const canvas = document.querySelector('canvas');
 const ctx = canvas.getContext('2d');
-const camera = new Camera({zoom: 1, followSpeed: 5});
+const camera = new Camera({zoom: 1, followSpeed: 5, zoomSpeed: 2});
+
+resizeCanvas();
 
 //Used for keeping track of mouse information
 let mousePos = {x: 0, y: 0}
@@ -27,12 +36,15 @@ let mouseDown = false;
 let deltaTime;
 let oldTimeStamp = 0;
 
-// { Key: key, Value: whether it is pressed or not}
+//Used for calculating average fps over a set period of time
+const fpsQueue = new Queue();
+
+//{Key: key, Value: bool pressed}
 var pressedKeys = {};
 
 //Used for sending input changes to server
-const INPUT_UPDATES_PER_SEC = 30;
-const INPUT_UPDATE_INTERVAL = 1 / INPUT_UPDATES_PER_SEC;
+const INPUT_UPDATES_PER_SECOND = 20;
+const INPUT_UPDATE_INTERVAL = 1 / INPUT_UPDATES_PER_SECOND;
 let inputUpdates = {};
 let inputUpdateTimer = 0;
 let lastInput = {x: 0, y: 0}
@@ -43,32 +55,45 @@ play_button.addEventListener('click', () => {
 });
 
 //Fired to confirm that room was joined successfully
-socket.on('room joined', (args) => {
+socket.on('room joined', (roomID) => {
 
-    localRoom = args.room;
+    localRoomID = roomID;
     play_interface.style.display = 'none';
 
-    console.log('Joined ' + args.room);
+    console.log('Joined ' + roomID);
 });
 
 //Fired when player leaves room
 socket.on('room left', () => {
 
-    console.log('Left ' + localRoom);
-
-    localRoom = null;
-    localEntityList = new EntityList();
+    localRoomID = null;
+    localRoom = new Room();
     play_interface.style.display = playInterfaceDisplay;
+
+    console.log('Left ' + localRoomID);
 });
 
 //Fired to sync the entire room state
-socket.on('client update', (entities) => {
-    localEntityList.fromArray(entities);
-    localPlayer = localEntityList.has(socket.id) ? localEntityList.get(socket.id) : null;
+socket.on('client update', (args) => {
+
+    localRoom.fromArray(args.entities);
+    localRoom.size = args.roomSize;
+
+    localPlayerEntity = localRoom.hasEntity(socket.id) ? localRoom.getEntity(socket.id) : null;
 });
 
-function drawGrid(color, spacing) {
-    ctx.lineWidth = 1;
+//Used for finding ping
+setInterval(() => {
+    const start = Date.now();
+  
+    socket.emit("ping", () => {
+      const duration = Date.now() - start;
+      pingText.textContent = "ping: " + Math.round(duration) + "ms";
+    });
+}, 1000);
+
+function drawGrid(color, spacing, width) {
+    ctx.lineWidth = width;
 
     for (let i = (camera.position.x * camera.zoom) % (spacing * camera.zoom); i < canvas.width; i += spacing * camera.zoom) {
         ctx.beginPath();
@@ -89,31 +114,61 @@ function drawGrid(color, spacing) {
     }
 }
 
+function drawBoundaries(color, boundDst) {
+    ctx.fillStyle = color;
+
+    const left   = camera.worldToScreen({x: -boundDst, y: 0}).x;
+    const right  = camera.worldToScreen({x: boundDst, y: 0}).x;
+    const top    = camera.worldToScreen({x: 0, y: -boundDst}).y;
+    const bottom = camera.worldToScreen({x: 0, y: boundDst}).y;
+
+    ctx.beginPath();
+    ctx.rect(0, 0, left, canvas.height);
+    ctx.rect(canvas.width, 0, right - canvas.width, canvas.height);
+    ctx.rect(left, 0, right - left, top);
+    ctx.rect(left, canvas.height, right - left, bottom - canvas.height);
+
+    ctx.fill();
+    ctx.closePath();
+}
+
 function draw() {
     ctx.fillStyle = new Color('oklch', [.975, 0, 0], 1);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    drawGrid(new Color('oklch', [.8, 0, 0], 1), 32);
-    
-    localEntityList.drawEntities(ctx, camera);
+
+    drawGrid(new Color('oklch', [.8, 0, 0], 1), 32, 1);
+    drawBoundaries(new Color('srgb', [0, 0, 0], 0.15), localRoom.size / 2);
+
+    localRoom.drawEntities(ctx, camera, canvas);
 }
 
 function gameLoop(timeStamp) {
     deltaTime = (timeStamp - oldTimeStamp) / 1000;
     deltaTime = isNaN(deltaTime) ? 0 : deltaTime;
 
-    localEntityList.updateEntities(deltaTime);
+    fpsQueue.enqueue(deltaTime);
+    fpsQueue.capTotal(1);
+    fpsText.textContent = "fps: " + Math.round(1 / (fpsQueue.getTotal() / fpsQueue.getLength()));
 
-    if (localPlayer) {
+    if (deltaTime > 1/20) deltaTime = 1/20;
 
-        camera.setCenterTarget(canvas, localPlayer.position);
-        camera.update(deltaTime);
+    localRoom.updateEntities(deltaTime, camera, canvas);
+
+    playersText.textContent = "players: " + localRoom.getNumberOfPlayers();
+    entitiesText.textContent = "entities: " + localRoom.getNumberOfEntities();
+
+    if (localPlayerEntity) {
+
+        camera.setCenterTarget(canvas, localPlayerEntity.position);
+        camera.setTargetZoom(canvas, localPlayerEntity.radius);
+        camera.update(deltaTime, canvas);
 
         mouseWorldPos = camera.screenToWorld(mousePos);
 
         //Calculates vector to move along based on wasd input, normalizes it, and raises update input flag if wasd vector input has changed
         const input = {x: keyPressed("d") - keyPressed("a"), y: keyPressed("s") - keyPressed("w")};
-        if (input.x != 0 && input.y != 0) {
-            const inputMag = Math.sqrt(input.x * input.x + input.y * input.y);
+        const inputMag = Math.sqrt(input.x * input.x + input.y * input.y);
+        if (inputMag != 0) {
             input.x /= inputMag;
             input.y /= inputMag;
         }
@@ -123,25 +178,23 @@ function gameLoop(timeStamp) {
             inputUpdates.y = parseFloat(input.y.toFixed(3));
         }
 
-        //If the mouse has moved then it will be sent to server
+        //Only send mouse position to server if it has moved to reduce data sent
         if (mouseWorldPos.x != lastMouseWorldPos.x || mouseWorldPos.y != lastMouseWorldPos.y) {
-            inputUpdates.mouseWorldPosX = Math.floor(mouseWorldPos.x);
-            inputUpdates.mouseWorldPosY = Math.floor(mouseWorldPos.y);
+            inputUpdates.mouseWorldPosX = Math.round(mouseWorldPos.x);
+            inputUpdates.mouseWorldPosY = Math.round(mouseWorldPos.y);
             lastMouseWorldPos = mouseWorldPos;
         }
 
-        localPlayer.acceleration.x = input.x * 5000;
-        localPlayer.acceleration.y = input.y * 5000;
-        localPlayer.lookTarget = mouseWorldPos;
+        localPlayerEntity.acceleration.x = input.x * Entity.PLAYER_BASE_SPEED;
+        localPlayerEntity.acceleration.y = input.y * Entity.PLAYER_BASE_SPEED;
+        localPlayerEntity.lookTarget = mouseWorldPos;
 
         lastInput = structuredClone(input);
     }
 
     inputUpdateTimer += deltaTime;
     if (Object.keys(inputUpdates).length > 0 && inputUpdateTimer >= INPUT_UPDATE_INTERVAL) {
-
         socket.emit('update input', inputUpdates);
-
         inputUpdateTimer = 0;
         inputUpdates = {};
     }
@@ -155,6 +208,7 @@ function gameLoop(timeStamp) {
 function resizeCanvas() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
+    socket.emit('resize canvas', {x: canvas.width, y: canvas.height});
 }
 
 //Updates canvas if window is refreshed or the size is changed
