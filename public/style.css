@@ -1,89 +1,132 @@
+/* Global styles */
 body {
     margin: 0;
-}
-
-canvas {
+  }
+  
+  canvas {
     display: block;
     width: 100vw;
     height: 100vh;
     margin: 0;
-    padding: 0;
-}
-
-.rounded-panel {
-    border-style: solid;
-    border-width: 3px;
+  }
+  
+  /* Shared styles */
+  .rounded-panel {
+    border: 3px solid;
     border-radius: 6px;
     padding: 12px;
-    font-size: 21px;
-    line-height: 1.2;
-    font-weight: 500;
-    font-family: Arial, Helvetica, sans-serif;
-    color: white;
+    font: 500 21px/1.2 Arial, Helvetica, sans-serif;
     user-select: none;
     outline: none;
-}
-
-.debug-text {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 1.25rem;
+  }
+  
+  /* Debug text */
+  .debug-text {
+    font: 1.25rem Arial, Helvetica, sans-serif;
+    user-select: none;
     margin: 2px;
-}
-
-#debug {
+  }
+  
+  /* Debug section */
+  #debug {
     position: absolute;
+    top: 0;
     left: 2px;
-    top: 0px;
-}
-
-#play-interface {
+  }
+  
+  /* Play interface */
+  #play-interface {
     position: absolute;
+    bottom: 20%;
     left: 50%;
     transform: translateX(-50%);
-    bottom: 10%;
     width: 420px;
-    height: 120px;
     text-align: center;
-}
+  }
 
-#gamemode-group {
+  #respawn-interface {
+    position: absolute;
+    bottom: 0%;
+    margin-bottom: 16px;
+    left: 50%;
+    transform: translate(-50%);
+    width: 300px;
+    text-align: center;
     display: flex;
-    justify-content: space-between;
+  }
+
+  #respawn-button {
+    cursor: pointer;
+    flex-grow: 1;
+    height: 100%;
+    margin-right: 8px;
+    border-color: oklch(55% 0.20 45);
+    background-color: oklch(80% 0.15 45);
+    color: white;
+  }
+
+  #back-button {
+    cursor: pointer;
+    flex-grow: 1;
+    height: 100%;
+    border-color: oklch(45% 0.23 0);
+    background-color: oklch(70% 0.18 0);
+    color: white;
+  }
+  
+  /* Input groups */
+  .input-group {
+    display: flex;
     align-items: center;
+    justify-content: space-between;
     margin-bottom: 12px;
     height: 50%;
-}
-
-#gamemode-label {
+  }
+  
+  /* Label styles */
+  label.rounded-panel {
     display: flex;
     align-items: center;
     justify-content: center;
-    text-align: center;
     height: 100%;
     margin-right: 12px;
-    padding-right: 0px;
-    padding-left: 0px;
-    box-sizing: border-box;
-    border-color: rgba(0, 0, 0, 0);
-    background-color: rgba(0, 0, 0, 0);
+    padding: 0;
+    border: none;
+    background: none;
     color: black;
-}
-
-#gamemode-select {
-    cursor: pointer;
-    width: 100%;
-    height: 100%;
-    flex-grow: 1;
-    margin: 0;
     box-sizing: border-box;
-    border-color: oklch(43.18% 0.0884 243.03);
-    background-color: oklch(60.39% 0.1027 243.03);
-}
-
-#play-button {
+  }
+  
+  /* Select styles */
+  #gamemode-select {
+    flex-grow: 1;
+    height: 100%;
+    margin: 0;
+    cursor: pointer;
+    box-sizing: border-box;
+    border-color: oklch(45% 0.20 40);
+    background-color: oklch(70% 0.15 40);
+    color: white; /* Updated text color */
+  }
+  
+  /* Input styles */
+  #username-input {
+    flex-grow: 1;
+    height: 100%;
+    margin: 0;
+    color: black;
+    box-sizing: border-box;
+    border-color: oklch(55% 0.20 150);
+    background-color: oklch(95% 0.15 150);
+  }
+  
+  /* Button styles */
+  #play-button {
     cursor: pointer;
     width: 100%;
     height: 50%;
-    border-color: oklch(43.18% 0.0884 243.03);
-    background-color: oklch(60.39% 0.1027 243.03);
-}
+    border-color: oklch(45% 0.20 240);
+    background-color: oklch(70% 0.15 240);
+    color: white; /* Updated text color */
+  }
+  

@@ -3,33 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>online-shooter</title>
+    <title>Online Shooter</title>
     <link rel="stylesheet" href="style.css" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+    </style>
   </head>
   <body>
     <canvas></canvas>
 
     <div id="debug">
-      <p class="debug-text" id="fps"></p>
-      <p class="debug-text" id="ping"></p>
-      <p class="debug-text" id="players"></p>
-      <p class="debug-text" id="entities"></p>
+      <p id="fps" class="debug-text"></p>
+      <p id="ping" class="debug-text"></p>
+      <p id="players" class="debug-text"></p>
+      <p id="entities" class="debug-text"></p>
     </div>
 
     <div id="play-interface">
-      <div id="gamemode-group">
-        <label id="gamemode-label" class="rounded-panel">Gamemode:</label>
-        <select
-          name="gamemode-select"
-          id="gamemode-select"
-          class="rounded-panel"
-        >
+      <div class="input-group">
+        <label for="gamemode-select" class="rounded-panel">Room:</label>
+        <select id="gamemode-select" class="rounded-panel">
           <option value="room1">Room 1</option>
-          <option value="room2">Room 2</option>
-          <option value="room3">Room 3</option>
         </select>
       </div>
+      <div class="input-group">
+        <label for="username-input" class="rounded-panel">Name:</label>
+        <input
+          type="text"
+          id="username-input"
+          class="rounded-panel"
+          maxlength="11"
+        />
+      </div>
       <button id="play-button" class="rounded-panel">Play</button>
+    </div>
+
+    <div id="respawn-interface">
+      <button id="respawn-button" class="rounded-panel">Respawn</button>
+      <button id="back-button" class="rounded-panel">Back</button>
     </div>
 
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>

@@ -11,11 +11,12 @@ export default class Room {
     #playerViewports = null;
     #viewportEntities = null;
 
-    constructor({onServer = false, size = 1024} = {}) {
+    constructor({onServer = false, size = 2048, id} = {}) {
+        this.id = id;
         this.onServer = onServer;
         this.size = size;
         this.cellSize = 512;
-        this.pushCoefficient = 50;
+        this.pushCoefficient = 80;
 
         //Map {Key: cell coordinates {x, y}, Value: Map {Key: entity id, Value: entity}}
         this.grid = new Map();
@@ -28,18 +29,55 @@ export default class Room {
         this.#entities = new Map(); //Map {Key: entity id, Value: entity}
         this.#playerEntities = new Map(); //Map {Key: player id, Value: player entity}
 
-        //These two maps are used only by the server to determine which entities to send to which players
+        //These maps are used only by the server to determine which entities to send to which players
         this.#playerViewports = null;
         this.#viewportEntities = null;
 
-        if (onServer) this.#playerViewports = new Map(); //Map {Key: player id, Value: viewport dimensions {x, y, width, height}
-        if (onServer) this.#viewportEntities = new Map(); //Map {Key: viewport dimensions {x, y, width, height}, Value: Map {Key: entity id, Value: entity}}
+        if (onServer) {
+            this.#playerViewports = new Map(); //Map {Key: player id, Value: viewport dimensions {x, y, width, height}
+            this.#viewportEntities = new Map(); //Map {Key: viewport dimensions {x, y, width, height}, Value: Map {Key: entity id, Value: entity}}
+        }
     }
 
     //This function should only be used on the server for sending data to client
     //TODO: Only send necessary data to clients, which is that found in serverUpdate function. Only send entire entity data when player first joins or new entity is created
-    static toArray(entitiesMap) {
-        return Array.from(entitiesMap.entries());
+    static toArray(entitiesMap, playerID) {
+        const arr = [];
+
+        for (const [entityID, entity] of entitiesMap) {
+            let updatePackage = null;
+
+            //Decide whether to send all data or minimal data based on whether client has already receieved data for this entity
+            if (entity.fullBroadcastPlayerIDs.includes(playerID))
+                updatePackage = entity.getPartialUpdatePackage();
+            else {
+                updatePackage = entity.getFullUpdatePackage();
+                entity.fullBroadcastPlayerIDs.push(playerID);
+            }
+
+            arr.push([entityID, updatePackage]);
+        }
+
+        return arr;//Array.from(entitiesMap.entries());
+    }
+
+    //This function should only be used on the client for receiving data from server
+    fromArray(arr) {
+
+        //The array does not conserve the entity class, so the entities must be reconstructed from their respective object
+        for (let i = 0; i < arr.length; i++) {
+            //First column [0] is id, and second column [1] is entity data
+            const entityID = arr[i][0];
+            const entityData = arr[i][1]
+
+            if (!this.hasEntity(entityID)) {
+                this.addEntity(new Entity(entityData));
+            }
+            else {
+                const entity = this.getEntity(entityID);
+                entity.serverUpdate(entityData);
+            }
+        }
     }
 
     addEntity(entity) {
@@ -111,42 +149,23 @@ export default class Room {
         return result;
     }
 
-    //This function should only be used on the client for receiving data from server
-    fromArray(arr) {
-
-        const start = performance.now();
-
-        //The array does not conserve the entity class, so the entities must be reconstructed from their respective object
-        for (let i = 0; i < arr.length; i++) {
-            //First column [0] is id, and second column [1] is entity data
-            const entityID = arr[i][0];
-            const entityData = arr[i][1]
-
-            if (!this.hasEntity(entityID))
-                this.addEntity(new Entity(entityData));
-            else {
-                const entity = this.getEntity(entityID);
-                entity.serverUpdate(entityData);
-            }
-        }
-
-        const end = performance.now();
-        this.entityReceptionTime = end - start;
-    }
-
     updateEntities(deltaTime, users = null) {
-        const updateStart = performance.now();
-
         for (const entity of this.getEntityValues()) {
             entity.update(deltaTime, this.size);
 
-            if (entity.removeFlag)
-                this.#entities.delete(entity.id);
-        }
+            if (this.onServer && entity.shooting) {
+                const projectile = entity.shoot();
+                if (projectile) {
+                    this.addEntity(projectile);
+                }
+            }
 
-        const updateEnd = performance.now();
-        this.updateTime = updateEnd - updateStart;
-        const collisionStart = updateEnd;
+            if (entity.removeFlag) {
+                this.#entities.delete(entity.id);
+                if (this.#playerEntities.has(entity.id))
+                    this.#playerEntities.delete(entity.id);
+            }
+        }
 
         const collisionList = this.#detectCollisions();
 
@@ -154,25 +173,64 @@ export default class Room {
             this.#handleCollision(entity1, entity2, deltaTime);
         });
 
-        const collisionEnd = performance.now();
-        this.collisionTime = collisionEnd - collisionStart;
-
         if (this.onServer) this.#updateViewports(users);
     }
 
     drawEntities(ctx, camera, canvas) {
-        const drawStart = performance.now();
 
+        const drawEntities = [];
+        const drawPlayers = [];
+        const drawProjectiles = [];
+
+        //Adds all entities to their corresponding layer in the appropriate array depending on their type
         for (const entity of this.getEntityValues()) {
+            if (!camera.entityWithinCamera(entity, canvas, entity.radius)) continue;
 
-            if (!camera.entityWithinCamera(entity, canvas, entity.radius))
-                continue;
+            const layer = entity.drawLayer;
 
-            entity.draw(ctx, camera);
+            if (entity.type == Entity.types.PLAYER) {
+                if (!drawPlayers[layer]) drawPlayers[layer] = [];
+                drawPlayers[layer].push(entity);
+            } else if (entity.type == Entity.types.PROJECTILE) {
+                if (!drawProjectiles[layer]) drawProjectiles[layer] = [];
+                drawProjectiles[layer].push(entity);
+            } else {
+                if (!drawEntities[layer]) drawEntities[layer] = [];
+                drawEntities[layer].push(entity);
+            }
         }
 
-        const drawEnd = performance.now();
-        this.drawTime = drawEnd - drawStart;
+        //Entities are drawn in order of their layer, with higher layers being drawn first and appearing in the back
+        
+        //Other entities (eg. shapes) are drawn first, so they appear behind other entities
+        for (let i = drawEntities.length - 1; i >= 0; i--) {
+            if (!drawEntities[i]) continue;
+            for (const entity of drawEntities[i]) {
+                entity.draw(ctx, camera);
+                entity.drawHealth(ctx, camera);
+                entity.drawName(ctx, camera);
+            }
+        }
+
+        //Projectiles appear in between shapes and players
+        for (let i = drawProjectiles.length - 1; i >= 0; i--) {
+            if (!drawProjectiles[i]) continue;
+            for (const entity of drawProjectiles[i]) {
+                entity.draw(ctx, camera);
+                entity.drawHealth(ctx, camera);
+                entity.drawName(ctx, camera);
+            }
+        }
+        
+        //Players appear in front of all other entities
+        for (let i = drawPlayers.length - 1; i >= 0; i--) {
+            if (!drawPlayers[i]) continue;
+            for (const entity of drawPlayers[i]) {
+                entity.draw(ctx, camera);
+                entity.drawHealth(ctx, camera);
+                entity.drawName(ctx, camera);
+            }
+        }
     }
 
     //Helper function to generate a key for the grid
@@ -183,20 +241,35 @@ export default class Room {
     #updateViewports(users) {
         this.#playerViewports = new Map();
 
-        for (const [playerID, playerEntity] of this.#playerEntities) {
+        for (const [userID, userInfo] of users) {
+            if (userInfo.roomID != this.id || !users.has(userID) || !users.get(userID).canvasSize) continue;
+
             let viewportSize = {x: 0, y: 0};
+            let viewport = {x: 0, y: 0, width: 0, height: 0};
 
-            if (users.has(playerID) && users.get(playerID).canvasSize)
-                viewportSize = Camera.getViewportSize(playerEntity.targetRadius, users.get(playerID).canvasSize);
+            if (this.#playerEntities.has(userID) && !this.#playerEntities.get(userID).deadFlag) {
+                const playerEntity = this.#playerEntities.get(userID);
 
-            const viewport = {
-                x: playerEntity.position.x,
-                y: playerEntity.position.y,
-                width: viewportSize.x,
-                height: viewportSize.y
-            };
+                viewportSize = Camera.getViewportSize(playerEntity.targetRadius / playerEntity.baseRadius, users.get(userID).canvasSize);
 
-            this.#playerViewports.set(playerID, viewport);
+                viewport = {
+                    x: playerEntity.position.x,
+                    y: playerEntity.position.y,
+                    width: viewportSize.x,
+                    height: viewportSize.y
+                };
+            } else {
+                viewportSize = Camera.getViewportSize(Entity.DEAD_PLAYER_RADIUS / (playerEntity ? playerEntity.baseRadius : 24), users.get(userID).canvasSize);
+
+                viewport = {
+                    x: userInfo.position.x,
+                    y: userInfo.position.y,
+                    width: viewportSize.x,
+                    height: viewportSize.y
+                };
+            }
+
+            this.#playerViewports.set(userID, viewport);
             this.#viewportEntities.set(viewport, new Map());
         }
 
@@ -208,33 +281,62 @@ export default class Room {
                     entity.position.y - entity.radius < viewport.y + viewport.height / 2
                 ) {
                     this.#viewportEntities.get(viewport).set(entityID, entity);
+                } else {
+                    entity.fullBroadcastPlayerIDs.splice(entity.fullBroadcastPlayerIDs.indexOf(playerID), 1);
                 }
             }
         }
     }
 
-    #entityDamageOtherEntity(attackerEntity, targetEntity, deltaTime) {
-        if (attackerEntity.deadFlag || targetEntity.deadFlag)
-            return;
+    #awardScore(receiverEntity, senderEntity) {
+        if (receiverEntity.type != Entity.types.PLAYER) return;
 
-        targetEntity.damage(attackerEntity.contactDamage * deltaTime)
+        let score = senderEntity.score;
 
-        //If target was killed by a player, player is granted score depending on the targets's type
-        if (targetEntity.deadFlag && attackerEntity.type == Entity.types.PLAYER) {
-            if (targetEntity.type == Entity.types.SHAPE)
-                attackerEntity.score += targetEntity.score;
-            else if (targetEntity.type == Entity.types.PLAYER)
-                attackerEntity.score += targetEntity.score * Room.PLAYER_SCORE_TRANSFER_FACTOR;
-            else
-                attackerEntity.score += targetEntity.score;
-        }
+        if (senderEntity.type == Entity.types.PLAYER)
+           score *= Room.PLAYER_SCORE_TRANSFER_FACTOR;
+
+        receiverEntity.score += score;
     }
 
     #handleCollision(entity1, entity2, deltaTime) {
 
+        if (!entity1 || !entity2) return;
+
+        if ((entity1.owner == entity2.id) || (entity2.owner == entity1.id) || ((entity1.owner != null) && (entity2.owner != null) && (entity1.owner == entity2.owner)))
+            return;
+
         //The entities hurt each other
-        this.#entityDamageOtherEntity(entity1, entity2, deltaTime);
-        this.#entityDamageOtherEntity(entity2, entity1, deltaTime);
+        if (this.onServer) {
+            const entity1Dmg = entity1.contactDamage * deltaTime;
+            const entity2Dmg = entity2.contactDamage * deltaTime;
+    
+            if (entity1Dmg >= entity2.health && entity2Dmg >= entity1.health) {
+    
+                const timeToKillEntity1 = entity1.health / entity2.contactDamage;
+                const timeToKillEntity2 = entity2.health / entity1.contactDamage;
+        
+                if (timeToKillEntity1 < timeToKillEntity2) {
+                    entity1.damage(entity2.contactDamage * deltaTime);
+                    entity2.damage(entity1.contactDamage * timeToKillEntity1);
+                } else if (timeToKillEntity2 < timeToKillEntity1) {
+                    entity2.damage(entity1.contactDamage * deltaTime);
+                    entity1.damage(entity2.contactDamage * timeToKillEntity2);
+                } else {
+                    entity1.damage(entity1.health);
+                    entity2.damage(entity2.health);
+                }
+    
+            } else {
+                entity1.damage(entity2.contactDamage * deltaTime);
+                entity2.damage(entity1.contactDamage * deltaTime);
+            }
+
+            if (entity1.deadFlag && !entity2.deadFlag)
+                this.#awardScore(entity2.owner ? this.getEntity(entity2.owner) : entity2, entity1);
+            else if (entity2.deadFlag && !entity1.deadFlag)
+                this.#awardScore(entity1.owner ? this.getEntity(entity1.owner) : entity1, entity2);
+        }
 
         const distanceX = entity2.position.x - entity1.position.x;
         const distanceY = entity2.position.y - entity1.position.y;

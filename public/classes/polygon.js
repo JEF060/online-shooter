@@ -4,15 +4,15 @@ export default class Polygon {
         outlineThickness = 4
     } = {}) {
         this.points = points;
-        this.shrunkPoints = Polygon.#shrinkPoints(points, outlineThickness / 2);
+        this.shrinkVectors = Polygon.#shrinkPoints(points, outlineThickness / 2);
         this.outlineThickness = outlineThickness;
     }
 
-    draw({ctx, camera, scale, pos, rot, color, outlineColor} = {}) {
-        Polygon.drawPolygon({ctx: ctx, camera: camera, scale: scale, pos: pos, rot: rot, points: this.shrunkPoints, color: color, outlineColor: outlineColor, outlineThickness: this.outlineThickness});
+    draw({ctx, camera, scale, pos, offset = {x: 0, y: 0}, rot, color, outlineColor} = {}) {
+        Polygon.drawPolygon({ctx: ctx, camera: camera, scale: scale, pos: pos, offset: offset, rot: rot, points: this.points, shrinkVectors: this.shrinkVectors, color: color, outlineColor: outlineColor, outlineThickness: this.outlineThickness});
     }
 
-    static drawPolygon({ctx, camera, scale, pos, rot, points, color, outlineColor, outlineThickness} = {}) {
+    static drawPolygon({ctx, camera, scale, pos, offset = {x: 0, y: 0}, rot, points, shrinkVectors, color, outlineColor, outlineThickness} = {}) {
 
         ctx.fillStyle = color;
         ctx.strokeStyle = outlineColor;
@@ -22,8 +22,9 @@ export default class Polygon {
         ctx.lineJoin = 'round';
         
         const r = {x: Math.cos(rot), y: Math.sin(rot)};
-        let point = this.#multiplyComplex({x: points[0].x, y: points[0].y}, r);
-        let screenPos = camera.worldToScreen({x: pos.x + point.x * scale, y: pos.y + point.y * scale});
+        let shrinkVector = shrinkVectors[0];
+        let point = this.#multiplyComplex({x: (points[0].x + offset.x) * scale + shrinkVector.x, y: (points[0].y + offset.y) * scale + shrinkVector.y}, r);
+        let screenPos = camera.worldToScreen({x: pos.x + point.x, y: pos.y + point.y});
 
         //Trace out the path of the polygon
         //---------------------------------------------------------------------------------------------
@@ -31,13 +32,15 @@ export default class Polygon {
         ctx.moveTo(screenPos.x, screenPos.y);
 
         for (let i = 1; i < points.length; i++) {
-            point = this.#multiplyComplex({x: points[i].x, y: points[i].y}, r);
-            screenPos = camera.worldToScreen({x: pos.x + point.x * scale, y: pos.y + point.y * scale});
+            shrinkVector = shrinkVectors[i];
+            point = this.#multiplyComplex({x: (points[i].x + offset.x) * scale + shrinkVector.x, y: (points[i].y + offset.y) * scale + shrinkVector.y}, r);
+            screenPos = camera.worldToScreen({x: pos.x + point.x, y: pos.y + point.y});
             ctx.lineTo(screenPos.x, screenPos.y)
         }
 
-        point = this.#multiplyComplex({x: points[0].x, y: points[0].y}, r);
-        screenPos = camera.worldToScreen({x: pos.x + point.x * scale, y: pos.y + point.y * scale});
+        shrinkVector = shrinkVectors[0];
+        point = this.#multiplyComplex({x: (points[0].x + offset.x) * scale + shrinkVector.x, y: (points[0].y + offset.y) * scale + shrinkVector.y}, r);
+        screenPos = camera.worldToScreen({x: pos.x + point.x, y: pos.y + point.y});
         ctx.lineTo(screenPos.x, screenPos.y);
         //---------------------------------------------------------------------------------------------
 
@@ -69,7 +72,7 @@ export default class Polygon {
 
     //Moves points of polygon inwards towards center so that outline thickness does to increase perceived size
     static #shrinkPoints(points, r) {
-        let newPoints = new Array(points.length);
+        let shrinkVectors = new Array(points.length);
 
         for (let i = 0; i < points.length; i++) {
             const currentPoint = points[i];
@@ -86,13 +89,13 @@ export default class Polygon {
             const nextVectorMag = Polygon.#findMag(nextVector);
             nextVector = {x: nextVector.x / nextVectorMag, y: nextVector.y / nextVectorMag};
 
-            let pushVector = {x: previousVector.x + nextVector.x, y: previousVector.y + nextVector.y};
-            const pushVectorMag = Polygon.#findMag(pushVector);
-            pushVector = {x: r * pushVector.x / pushVectorMag, y: r * pushVector.y / pushVectorMag};
+            let shrinkVector = {x: previousVector.x + nextVector.x, y: previousVector.y + nextVector.y};
+            const pushVectorMag = Polygon.#findMag(shrinkVector);
+            shrinkVector = {x: r * shrinkVector.x / pushVectorMag, y: r * shrinkVector.y / pushVectorMag};
 
-            newPoints[i] = {x: currentPoint.x + pushVector.x, y: currentPoint.y + pushVector.y};
+            shrinkVectors[i] = {x: shrinkVector.x, y: shrinkVector.y};
         }
 
-        return newPoints;
+        return shrinkVectors;
     }
 }

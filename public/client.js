@@ -6,9 +6,16 @@ import Entity from "./classes/entity.js";
 const socket = io();
 
 const play_interface = document.getElementById('play-interface');
+const playInterfaceDisplay = play_interface.style.display; //Used to show UI when user leaves room
 const play_button = document.getElementById('play-button');
 const gamemode_select = document.getElementById('gamemode-select');
-const playInterfaceDisplay = play_interface.style.display; //Used to show UI when user leaves room
+const username_input = document.getElementById('username-input');
+
+const respawn_interface = document.getElementById('respawn-interface');
+const respawnInterfaceDisplay = respawn_interface.style.display;
+const respawn_button = document.getElementById('respawn-button');
+const back_button = document.getElementById('back-button');
+respawn_interface.style.display = 'none';
 
 const fpsText = document.getElementById('fps');
 const pingText = document.getElementById('ping');
@@ -18,19 +25,24 @@ const entitiesText = document.getElementById('entities');
 let localRoomID = null; //The room the client is currently in; null means no room
 let localRoom = new Room(); //Keeps track of all the players in the same room as the client
 let localPlayerEntity = null;
+let playerDied = false;
+let hadPlayer = false;
+let username = '';
 
 //Used for drawing to screen
 const canvas = document.querySelector('canvas');
 const ctx = canvas.getContext('2d');
-const camera = new Camera({zoom: 1, followSpeed: 5, zoomSpeed: 2});
+const camera = new Camera({zoom: 1, followSpeed: 4, zoomSpeed: 1.5});
 
 resizeCanvas();
+camera.setCenterPos({x: 0, y: 0}, canvas);
 
 //Used for keeping track of mouse information
 let mousePos = {x: 0, y: 0}
 let mouseWorldPos = {x: 0, y: 0}
 let lastMouseWorldPos = {x: 0, y: 0}
 let mouseDown = false;
+let lastMouseDown = false;
 
 //Used for calculating delta time
 let deltaTime;
@@ -43,7 +55,7 @@ const fpsQueue = new Queue();
 var pressedKeys = {};
 
 //Used for sending input changes to server
-const INPUT_UPDATES_PER_SECOND = 20;
+const INPUT_UPDATES_PER_SECOND = 30;
 const INPUT_UPDATE_INTERVAL = 1 / INPUT_UPDATES_PER_SECOND;
 let inputUpdates = {};
 let inputUpdateTimer = 0;
@@ -51,14 +63,25 @@ let lastInput = {x: 0, y: 0}
 
 //Request to join room when play button clicked
 play_button.addEventListener('click', () => {
-    socket.emit('request join room', gamemode_select.value);
+    socket.emit('request join room', gamemode_select.value, username_input.value);
+});
+
+respawn_button.addEventListener('click', () => {
+    socket.emit('request join room', localRoomID, username);
+});
+
+back_button.addEventListener('click', () => {
+    play_interface.style.display = playInterfaceDisplay;
+    respawn_interface.style.display = 'none';
 });
 
 //Fired to confirm that room was joined successfully
-socket.on('room joined', (roomID) => {
+socket.on('room joined', (roomID, name) => {
 
     localRoomID = roomID;
+    username = name;
     play_interface.style.display = 'none';
+    respawn_interface.style.display = 'none';
 
     console.log('Joined ' + roomID);
 });
@@ -138,7 +161,8 @@ function draw() {
 
     drawGrid(new Color('oklch', [.8, 0, 0], 1), 32, 1);
     drawBoundaries(new Color('srgb', [0, 0, 0], 0.15), localRoom.size / 2);
-
+    
+    if (localPlayerEntity) localPlayerEntity.drawLayer = 0;
     localRoom.drawEntities(ctx, camera, canvas);
 }
 
@@ -154,16 +178,22 @@ function gameLoop(timeStamp) {
 
     localRoom.updateEntities(deltaTime, camera, canvas);
 
+    camera.update(deltaTime, canvas);
+
     playersText.textContent = "players: " + localRoom.getNumberOfPlayers();
     entitiesText.textContent = "entities: " + localRoom.getNumberOfEntities();
 
     if (localPlayerEntity) {
 
-        camera.setCenterTarget(canvas, localPlayerEntity.position);
-        camera.setTargetZoom(canvas, localPlayerEntity.radius);
-        camera.update(deltaTime, canvas);
+        camera.setTargetZoom(canvas, (!localPlayerEntity.deadFlag ? localPlayerEntity.targetRadius : Entity.DEAD_PLAYER_RADIUS) / localPlayerEntity.baseRadius);
+        camera.setCenterTarget(localPlayerEntity.position);
 
         mouseWorldPos = camera.screenToWorld(mousePos);
+
+        if (mouseDown != lastMouseDown) {
+            inputUpdates.mouseDown = mouseDown;
+        }
+        lastMouseDown = mouseDown;
 
         //Calculates vector to move along based on wasd input, normalizes it, and raises update input flag if wasd vector input has changed
         const input = {x: keyPressed("d") - keyPressed("a"), y: keyPressed("s") - keyPressed("w")};
@@ -190,6 +220,20 @@ function gameLoop(timeStamp) {
         localPlayerEntity.lookTarget = mouseWorldPos;
 
         lastInput = structuredClone(input);
+    }
+
+    if (localPlayerEntity && !localPlayerEntity.deadFlag) {
+        hadPlayer = true
+        playerDied = false;
+    } else if (hadPlayer) {
+        playerDied = true;
+        hadPlayer = false;
+    }
+
+    if (playerDied) {
+        respawn_interface.style.display = respawnInterfaceDisplay;
+        
+        playerDied = false;
     }
 
     inputUpdateTimer += deltaTime;
