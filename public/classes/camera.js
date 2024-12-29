@@ -6,7 +6,13 @@ export default class Camera {
     static MIN_VIEWPORT_HEIGHT = 540;
 
     //Bigger number means camera is zoomed out more
-    static VISIBLE_AREA = 8e5;
+    static VISIBLE_AREA = 4e5;
+
+    //Determines the proportionality of camera zoom to the radius
+    //Value of 1 means the player will visibly stay the same size on the screen (zoom increases linearly with radius)
+    //Value of less than 1 means the player will appear bigger on the screen as the camera zooms out (zoom proportional to some root of radius)
+    //Value of greater than 1 means the player will appear smaller as the camera zooms out (zoom proportional to some power of radius)
+    static RADIUS_EXP = 1;
 
     constructor({position = {x: 0, y: 0}, followSpeed = 1, zoom = 1, zoomSpeed = 1} = {}) {
         this.position = position;
@@ -20,7 +26,7 @@ export default class Camera {
     }
 
     static getViewportSize(targetEntityRadius, canvasSize) {
-        const idealZoom = Math.sqrt((Math.max(canvasSize.x, Camera.MIN_VIEWPORT_WIDTH) * Math.max(canvasSize.y, Camera.MIN_VIEWPORT_HEIGHT)) / Camera.VISIBLE_AREA) / (targetEntityRadius);
+        const idealZoom = Math.sqrt((Math.max(canvasSize.x, Camera.MIN_VIEWPORT_WIDTH) * Math.max(canvasSize.y, Camera.MIN_VIEWPORT_HEIGHT)) / Camera.VISIBLE_AREA) / Math.pow(targetEntityRadius, Camera.RADIUS_EXP);
 
         const size = {
             x: canvasSize.x / idealZoom,
@@ -70,7 +76,7 @@ export default class Camera {
 
     setTargetZoom(canvas, targetEntityRadius) {
         if (targetEntityRadius == 0) return;
-        this.targetZoom = Math.sqrt((Math.max(canvas.width, Camera.MIN_VIEWPORT_WIDTH) * Math.max(canvas.height, Camera.MIN_VIEWPORT_HEIGHT)) / Camera.VISIBLE_AREA) / (targetEntityRadius);
+        this.targetZoom = Math.sqrt((Math.max(canvas.width, Camera.MIN_VIEWPORT_WIDTH) * Math.max(canvas.height, Camera.MIN_VIEWPORT_HEIGHT)) / Camera.VISIBLE_AREA) / Math.pow(targetEntityRadius, Camera.RADIUS_EXP);
     }
 
     update(deltaTime, canvas) {

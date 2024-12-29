@@ -11,6 +11,8 @@ export default class Room {
     #playerViewports = null;
     #viewportEntities = null;
 
+    #scoreNeededForLevel = [];
+
     constructor({onServer = false, size = 2048, id} = {}) {
         this.id = id;
         this.onServer = onServer;
@@ -37,6 +39,29 @@ export default class Room {
             this.#playerViewports = new Map(); //Map {Key: player id, Value: viewport dimensions {x, y, width, height}
             this.#viewportEntities = new Map(); //Map {Key: viewport dimensions {x, y, width, height}, Value: Map {Key: entity id, Value: entity}}
         }
+        
+        this.MAX_LEVEL = 60;
+        this.#calculatedScoresNeeded({maxLevel: this.MAX_LEVEL, A: 0.197740112994, B: 4.80225988701});
+
+        //Used for scaling a player's stats as they level up
+
+        this.playerInitialRadius = 16;
+        this.playerFinalRadius = 48;
+
+        this.initialMovementSpeed = 2600;
+        this.finalMovementSpeed = 2300;
+
+        this.initialMaxHealth = 2.5;
+        this.finalMaxHealth = 5;
+
+        this.initialDmgFactor = 1;
+        this.finalDmgFactor = 1.25;
+
+        this.initialPlayerMass = 1;
+        this.finalPlayerMass = 3;
+
+        this.initialPlayerPushFactor = 1;
+        this.finalPlayerPushFactor = 3;
     }
 
     //This function should only be used on the server for sending data to client
@@ -150,14 +175,39 @@ export default class Room {
     }
 
     updateEntities(deltaTime, users = null) {
+        
         for (const entity of this.getEntityValues()) {
             entity.update(deltaTime, this.size);
 
-            if (this.onServer && entity.shooting) {
-                const projectile = entity.shoot();
-                if (projectile) {
+            if (entity.type == Entity.types.PLAYER) {
+                entity.level = this.#getLevelFromScore(entity.score)
+
+                entity.skillPointsAvailable = Math.floor(entity.level * Entity.MAX_TOTAL_SKILL_POINTS / this.MAX_LEVEL) - entity.skillPointsUsed;
+
+                const levelProportion = Math.floor(entity.level) / this.MAX_LEVEL;
+
+                const healthPercent = entity.health / entity.maxHealth;
+                const healthDispPercent = entity.healthDisplay / entity.maxHealth;
+
+                entity.maxHealth = (this.initialMaxHealth + levelProportion * (this.finalMaxHealth - this.initialMaxHealth)) * (1 + 5 * entity.skills['maxHealth'].completion);
+                entity.health = entity.maxHealth * healthPercent;
+                entity.healthDisplay = entity.maxHealth * healthDispPercent;
+
+                entity.healthRegenDelay = 20 - 15 * entity.skills['healthRegen'].completion;
+                entity.healthRegenSpeed = 0.1 + 0.1 * entity.skills['healthRegen'].completion;
+
+                entity.targetRadius = this.playerInitialRadius + levelProportion * (this.playerFinalRadius - this.playerInitialRadius);
+                entity.movementSpeed = this.initialMovementSpeed + levelProportion * (this.finalMovementSpeed - this.initialMovementSpeed);
+                entity.levelDmgFactor = this.initialDmgFactor + levelProportion * (this.finalDmgFactor - this.initialDmgFactor);
+                entity.mass = this.initialPlayerMass + levelProportion * (this.finalPlayerMass - this.initialPlayerMass);
+                entity.pushForce = this.initialPlayerPushFactor + levelProportion * (this.finalPlayerPushFactor - this.initialPlayerPushFactor);
+            }
+
+            if (this.onServer && entity.shooting || entity.shootingSecondary) {
+                const projectiles = entity.shoot();
+
+                if (projectiles) for (const projectile of projectiles)
                     this.addEntity(projectile);
-                }
             }
 
             if (entity.removeFlag) {
@@ -208,7 +258,6 @@ export default class Room {
             for (const entity of drawEntities[i]) {
                 entity.draw(ctx, camera);
                 entity.drawHealth(ctx, camera);
-                entity.drawName(ctx, camera);
             }
         }
 
@@ -217,8 +266,6 @@ export default class Room {
             if (!drawProjectiles[i]) continue;
             for (const entity of drawProjectiles[i]) {
                 entity.draw(ctx, camera);
-                entity.drawHealth(ctx, camera);
-                entity.drawName(ctx, camera);
             }
         }
         
@@ -236,6 +283,39 @@ export default class Room {
     //Helper function to generate a key for the grid
     static #getGridKey(x, y) {
         return `${x},${y}`;
+    }
+
+    #calculatedScoresNeeded({maxLevel, A, B}) {
+        this.#scoreNeededForLevel = [];
+        let runningTotal = 0;
+        for (let i = 0; i <= maxLevel; i++) {
+            const scoreNeeded = A * i * i + B * i;
+            runningTotal += scoreNeeded;
+            this.#scoreNeededForLevel.push(Math.round(runningTotal));
+        }
+    }
+
+    #getLevelFromScore(score) {
+        let level = null;
+        let lastScoreMilestone = 0;
+        let nextScoreMilestone = 0;
+        
+        for (let i = 0; i < this.#scoreNeededForLevel.length; i++) {
+            if (this.#scoreNeededForLevel[i + 1] > score) {
+                level = i;
+                lastScoreMilestone = this.#scoreNeededForLevel[i];
+                nextScoreMilestone = this.#scoreNeededForLevel[i + 1];
+                break;
+            }
+        }
+
+        if (level == null) {
+            level = this.#scoreNeededForLevel.length - 1;
+            return level;
+        }
+
+        level += (score - lastScoreMilestone) / (nextScoreMilestone - lastScoreMilestone);
+        return level;
     }
 
     #updateViewports(users) {
@@ -259,7 +339,7 @@ export default class Room {
                     height: viewportSize.y
                 };
             } else {
-                viewportSize = Camera.getViewportSize(Entity.DEAD_PLAYER_RADIUS / (playerEntity ? playerEntity.baseRadius : 24), users.get(userID).canvasSize);
+                viewportSize = Camera.getViewportSize(Entity.DEAD_PLAYER_ZOOM_FACTOR, users.get(userID).canvasSize);
 
                 viewport = {
                     x: userInfo.position.x,
@@ -301,41 +381,60 @@ export default class Room {
 
     #handleCollision(entity1, entity2, deltaTime) {
 
-        if (!entity1 || !entity2) return;
+        if (entity1 == null || entity2 == null) return;
 
         if ((entity1.owner == entity2.id) || (entity2.owner == entity1.id) || ((entity1.owner != null) && (entity2.owner != null) && (entity1.owner == entity2.owner)))
             return;
 
         //The entities hurt each other
-        if (this.onServer) {
-            const entity1Dmg = entity1.contactDamage * deltaTime;
-            const entity2Dmg = entity2.contactDamage * deltaTime;
-    
+        if (this.onServer && !(entity1.type == Entity.types.SHAPE && entity2.type == Entity.types.SHAPE)) {
+
+            let entity1Dmg = entity1.contactDamage * deltaTime;
+            let entity2Dmg = entity2.contactDamage * deltaTime;
+
+            if (entity1.type == Entity.types.PLAYER && entity2.type != Entity.types.PROJECTILE)
+                entity1Dmg *= 1 + 10 * entity1.skills['bodyDmg'].completion;
+
+            if (entity2.type == Entity.types.PLAYER && entity1.type != Entity.types.PROJECTILE)
+                entity2Dmg *= 1 + 10 * entity2.skills['bodyDmg'].completion;
+
             if (entity1Dmg >= entity2.health && entity2Dmg >= entity1.health) {
     
                 const timeToKillEntity1 = entity1.health / entity2.contactDamage;
                 const timeToKillEntity2 = entity2.health / entity1.contactDamage;
         
                 if (timeToKillEntity1 < timeToKillEntity2) {
-                    entity1.damage(entity2.contactDamage * deltaTime);
-                    entity2.damage(entity1.contactDamage * timeToKillEntity1);
+                    entity1.damage(entity2Dmg);
+                    entity2.damage(entity1Dmg * timeToKillEntity1 / deltaTime);
                 } else if (timeToKillEntity2 < timeToKillEntity1) {
-                    entity2.damage(entity1.contactDamage * deltaTime);
-                    entity1.damage(entity2.contactDamage * timeToKillEntity2);
+                    entity2.damage(entity1Dmg);
+                    entity1.damage(entity2Dmg * timeToKillEntity2 / deltaTime);
                 } else {
                     entity1.damage(entity1.health);
                     entity2.damage(entity2.health);
                 }
     
             } else {
-                entity1.damage(entity2.contactDamage * deltaTime);
-                entity2.damage(entity1.contactDamage * deltaTime);
+                entity1.damage(entity2Dmg);
+                entity2.damage(entity1Dmg);
             }
 
-            if (entity1.deadFlag && !entity2.deadFlag)
-                this.#awardScore(entity2.owner ? this.getEntity(entity2.owner) : entity2, entity1);
-            else if (entity2.deadFlag && !entity1.deadFlag)
-                this.#awardScore(entity1.owner ? this.getEntity(entity1.owner) : entity1, entity2);
+            if (entity1.deadFlag && !entity2.deadFlag) {
+                let awardee = entity2;
+                if (entity2.owner && this.hasEntity(entity2.owner))
+                    awardee = this.getEntity(entity2.owner);
+                this.#awardScore(awardee, entity1);
+            } else if (entity2.deadFlag && !entity1.deadFlag) {
+                let awardee = entity1;
+                if (entity1.owner && this.hasEntity(entity1.owner))
+                    awardee = this.getEntity(entity1.owner);
+                this.#awardScore(awardee, entity2);
+            } else if (entity1.deadFlag && entity2.deadFlag) {
+                if (entity1.type == Entity.types.SHAPE && entity2.owner && this.hasEntity(entity2.owner))
+                    this.#awardScore(this.getEntity(entity2.owner), entity1);
+                if (entity2.type == Entity.types.SHAPE && entity1.owner && this.hasEntity(entity1.owner))
+                    this.#awardScore(this.getEntity(entity1.owner), entity2);
+            }
         }
 
         const distanceX = entity2.position.x - entity1.position.x;
@@ -347,11 +446,14 @@ export default class Room {
         const displacementMag = radiusSum - distance;
         const displacementX = displacementMag * distanceX / distance;
         const displacementY = displacementMag * distanceY / distance;
+
+        const entity1Push = entity1.pushForce / ((entity1.type == Entity.types.PLAYER) ? 1 + 2 * entity1.skills['bodyDmg'].completion : 1);
+        const entity2Push = entity2.pushForce / ((entity2.type == Entity.types.PLAYER) ? 1 + 2 * entity2.skills['bodyDmg'].completion : 1);
         
-        entity2.velocity.x += displacementX * this.pushCoefficient * entity1.pushForce / entity2.mass * deltaTime;
-        entity2.velocity.y += displacementY * this.pushCoefficient * entity1.pushForce / entity2.mass * deltaTime;
-        entity1.velocity.x -= displacementX * this.pushCoefficient * entity2.pushForce / entity1.mass * deltaTime;
-        entity1.velocity.y -= displacementY * this.pushCoefficient * entity2.pushForce / entity1.mass * deltaTime;
+        entity2.velocity.x += displacementX * this.pushCoefficient * entity1Push / entity2.mass * deltaTime;
+        entity2.velocity.y += displacementY * this.pushCoefficient * entity1Push / entity2.mass * deltaTime;
+        entity1.velocity.x -= displacementX * this.pushCoefficient * entity2Push / entity1.mass * deltaTime;
+        entity1.velocity.y -= displacementY * this.pushCoefficient * entity2Push / entity1.mass * deltaTime;
     }
 
     #detectCollisions() {

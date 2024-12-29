@@ -36,8 +36,8 @@ const TICK_INTERVAL = 1 / TICKS_PER_SECOND;
 const ENTITY_TEMPLATES = EntityTemplates.templates;
 const SHAPE_TEMPLATES = ENTITY_TEMPLATES.shapes;
 const VALID_ROOM_IDS = ['room1', 'room2', 'room3']; //Used for validation so clients can't join rooms that shouldn't exist
-const ROOM_SIZE = 4096;
-const MAX_NAME_LENGTH = 11;
+const ROOM_SIZE = 6144;
+const MAX_NAME_LENGTH = 15;
 
 const users = new Map(); //Map {Key: user id, Value: user information {roomID, canvasSize: {x, y}}}
 const rooms = new Map(); //Map {Key: room id, Value: room object}
@@ -73,11 +73,9 @@ io.on('connection', (socket) => {
 
         //Create an entity for the player and add it to the room
         const hue = Math.random() * 360;
-        const projectile = new Entity({type: Entity.types.PROJECTILE, onServer: true, baseRadius: 6, lifetime: 1.5, maxHealth: 0.25, healthRegenDelay: 99, contactDamage: 20, mass: 0.1, growIn: false, colorVals: {col: [.71, 0.14, hue], a: 1}, outlineColVals: {col: [.45, 0.14, hue], a: 1}});
-        const cannon = new Cannon({onServer: true, rotation: Math.PI, points: Cannon.createPoints(Cannon.TYPES.BASIC, {width: 12, length: 16}), projectile: projectile, interval: 1, shootSpeed: 100, recoil: 4, shootSpread: 0.05, length: 16});
-        const projectile2 = new Entity({shooting: true, cannon: cannon, type: Entity.types.PROJECTILE, onServer: true, rotationalVelocity: Math.PI * 0, linearDrag: 1, baseRadius: 11, lifetime: 8, maxHealth: 0.5, healthRegenDelay: 99, contactDamage: 50, mass: 0.2, growIn: false, colorVals: {col: [.71, 0.14, hue], a: 1}, outlineColVals: {col: [.45, 0.14, hue], a: 1}});
-        const cannon2 = new Cannon({onServer: true, points: Cannon.createPoints(Cannon.TYPES.BASIC, {width: 22, length: 42}), projectile: projectile2, interval: 0.65, shootSpeed: 300, recoil: 1, shootSpread: 0.05, length: 42});
-        const playerEntity = new Entity({type: Entity.types.PLAYER, onServer: true, id: userID, name: verifiedUsername, cannon: cannon2, baseRadius: 24, maxHealth: 11, healthRegenSpeed: 5, healthRegenDelay: 3, contactDamage: 1, linearDrag: 10, rotationalDrag: 60, lookForce: 1200, colorVals: {col: [.71, 0.14, hue], a: 1}, outlineColVals: {col: [.45, 0.14, hue], a: 1}, outlineThickness: 4});
+        const projectile = new Entity({shooting: true, type: Entity.types.PROJECTILE, onServer: true, rotationalVelocity: Math.PI * 0, linearDrag: 0.1, baseRadius: 7.5, lifetime: 3, maxHealth: 0.1, healthRegenDelay: 99, contactDamage: 10, mass: 1, pushForce: 2, growIn: false, colorVals: {col: [.71, 0.14, hue], a: 1}, outlineColVals: {col: [.45, 0.14, hue], a: 1}});
+        const cannon = new Cannon({onServer: true, points: Cannon.createPoints(Cannon.TYPES.BASIC, {width: 15, length: 28}), projectile: projectile, interval: 1, shootSpeed: 360, recoil: 1, shootSpread: 0.06, length: 28});
+        const playerEntity = new Entity({type: Entity.types.PLAYER, onServer: true, id: userID, name: verifiedUsername, cannons: [cannon], baseRadius: 16, maxHealth: 3, contactDamage: 1, linearDrag: 10, rotationalDrag: 60, lookForce: 1200, colorVals: {col: [.71, 0.14, hue], a: 1}, outlineColVals: {col: [.45, 0.14, hue], a: 1}, outlineThickness: 4});
         rooms.get(joinRoomID).addEntity(playerEntity);
 
         socket.emit('room joined', joinRoomID, username); //Used to send verification back to the specific client that requested to join
@@ -106,6 +104,28 @@ io.on('connection', (socket) => {
         console.log(userID + ' disconnected');
     });
 
+    socket.on('upgrade skill', (args) => {
+
+        if (!users.has(userID)) return;
+        const roomID = users.get(userID).roomID;
+
+        if (!rooms.has(roomID)) return;
+        const room = rooms.get(roomID);
+
+        if (!room.hasEntity(userID)) return;
+        const playerEntity = room.getEntity(userID);
+
+        if (!playerEntity.skillPointsAvailable > 0)
+            return;
+
+        const skillName = args.skillName;
+
+        playerEntity.skillPointsAvailable--;
+        playerEntity.skillPointsUsed++;
+        playerEntity.skills[skillName].level++;
+
+    });
+
     socket.on('update input', (inputUpdates) => {
 
         if (!users.has(userID)) return;
@@ -120,6 +140,14 @@ io.on('connection', (socket) => {
         //Mouse click input
         if (inputUpdates.mouseDown != null)
             playerEntity.shooting = inputUpdates.mouseDown;
+        
+        //Mouse right click input
+        if (inputUpdates.mouseRightDown != null)
+            playerEntity.shootingSecondary = inputUpdates.mouseRightDown;
+
+        //Boost score for testing purposes
+        if (inputUpdates.boostScore != null)
+            playerEntity.boostScore = inputUpdates.boostScore;
 
         //Wasd input
         if (inputUpdates.x != null && inputUpdates.y != null) {
@@ -131,8 +159,8 @@ io.on('connection', (socket) => {
                 inputUpdates.y /= inputMag;
             }
 
-            playerEntity.acceleration.x = inputUpdates.x * Entity.PLAYER_BASE_SPEED;
-            playerEntity.acceleration.y = inputUpdates.y * Entity.PLAYER_BASE_SPEED;
+            playerEntity.acceleration.x = inputUpdates.x * playerEntity.movementSpeed * (1 + 0.75 * playerEntity.skills['movementSpeed'].completion);
+            playerEntity.acceleration.y = inputUpdates.y * playerEntity.movementSpeed * (1 + 0.75 * playerEntity.skills['movementSpeed'].completion);
         }
 
         //Mouse position input (influences rotation)
@@ -208,10 +236,10 @@ function getRandomAttribute(obj) {
 function createNewRoom(id) {
     const room = new Room({id: id, onServer: true, size: ROOM_SIZE});
 
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 250; i++) {
         let shapeData = getRandomAttribute(SHAPE_TEMPLATES).value;
         const points = Polygon.createRegularPolygon({sides: shapeData.sides, radius: shapeData.baseRadius, rotationalVelocity: Math.random() * 2 - 1, });
-        shapeData = Object.assign({}, shapeData, {type: Entity.types.SHAPE, owner: null, contactDamage: 10, maxHealth: Math.random(), healthRegenDelay: 0.5, onServer: true, position: {x: Math.random() * room.size - room.size / 2, y: Math.random() * room.size - room.size / 2}, rotation: Math.random() * 6.28, rotationalVelocity: Math.random() * 2 - 1, points: points, outlineThickness: 4});
+        shapeData = Object.assign({}, shapeData, {type: Entity.types.SHAPE, owner: null, healthRegenSpeed: 0.25, onServer: true, position: {x: Math.random() * room.size - room.size / 2, y: Math.random() * room.size - room.size / 2}, rotation: Math.random() * 6.28, rotationalVelocity: Math.random() * 2 - 1, points: points, outlineThickness: 4});
         const shape = new Entity(shapeData);
 
         room.addEntity(shape);

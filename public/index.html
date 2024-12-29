@@ -32,7 +32,10 @@
           type="text"
           id="username-input"
           class="rounded-panel"
-          maxlength="11"
+          maxlength="15"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
         />
       </div>
       <button id="play-button" class="rounded-panel">Play</button>
@@ -41,6 +44,86 @@
     <div id="respawn-interface">
       <button id="respawn-button" class="rounded-panel">Respawn</button>
       <button id="back-button" class="rounded-panel">Back</button>
+    </div>
+
+    <div id="hud">
+      <p class="hud-text" id="username-text">Test Username</p>
+      <p class="hud-text" id="score-text">Score: 3278</p>
+      <div id="level-progress-bar">
+        <div id="progress-fill"></div>
+        <div id="level-text" class="hud-text">Level 45</div>
+      </div>
+    </div>
+
+    <div id="skill-menu-hover-area">
+      <div id="skill-menu">
+        <div id="points-available-text"># points available</div>
+        <div id="points-used-text">Points used: #/30</div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Health Regen</div>
+          </div>
+          <div class="upgrade-button right-rounded health-regen-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Max Health</div>
+          </div>
+          <div class="upgrade-button right-rounded max-health-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Body Damage</div>
+          </div>
+          <div class="upgrade-button right-rounded body-damage-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Bullet Speed</div>
+          </div>
+          <div class="upgrade-button right-rounded bullet-speed-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Bullet Health</div>
+          </div>
+          <div class="upgrade-button right-rounded bullet-health-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Bullet Damage</div>
+          </div>
+          <div class="upgrade-button right-rounded bullet-damage-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Reload</div>
+          </div>
+          <div class="upgrade-button right-rounded reload-color">+</div>
+        </div>
+
+        <div class="skill-bar">
+          <div class="skill-left">
+            <div class="skill-area"></div>
+            <div class="skill-text">Movement Speed</div>
+          </div>
+          <div class="upgrade-button right-rounded movement-speed-color">+</div>
+        </div>
+      </div>
     </div>
 
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>

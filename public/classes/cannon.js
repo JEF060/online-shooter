@@ -3,12 +3,16 @@ import Polygon from "./polygon.js";
 
 export default class Cannon {
 
+    static RECOIL_ANIM_OFFSET_FRACTION = 0.1;
+    static RECOIL_ANIM_SPEED = 25;
+
     static TYPES = Object.freeze({
         BASIC: 0
     });
 
     constructor({
         onServer = false,
+        secondary = false,
         points = [],
         projectile = null,
         shootSpread = 0,
@@ -20,11 +24,13 @@ export default class Cannon {
         offset = {x: 0, y: 0},
         rotation = 0,
         length = 0,
+        scale = 1,
         outlineThickness = 4,
     } = {}) {
 
         this.onServer = onServer;
 
+        this.secondary = secondary;
         this.points = points;
         this.projectile = new Entity({onServer: onServer, ...projectile});
         this.shootSpread = shootSpread;
@@ -36,7 +42,10 @@ export default class Cannon {
         this.offset = offset;
         this.rotation = rotation;
         this.length = length;
+        this.scale = scale;
         this.outlineThickness = outlineThickness;
+
+        this.currentRecoilOffset = 0;
         
         if (!onServer)
             this.polygon = new Polygon({points: points, outlineThickness: outlineThickness});
@@ -57,6 +66,7 @@ export default class Cannon {
 
     getFullUpdatePackage() {
         return {
+            secondary: this.secondary,
             points: this.points,
             projectile: this.projectile.getFullUpdatePackage(),
             shootSpread: this.shootSpread,
@@ -86,11 +96,24 @@ export default class Cannon {
 
     update(deltaTime) {
         this.timer += deltaTime;
+
+        const recoil_anim_offset = Cannon.RECOIL_ANIM_OFFSET_FRACTION * this.length * this.scale;
+        const recoil_anim_time = recoil_anim_offset / Cannon.RECOIL_ANIM_SPEED;
+        const recoil_anim_percent = this.timer / recoil_anim_time;
+
+        if (recoil_anim_percent <= 1)
+            this.currentRecoilOffset = recoil_anim_offset * recoil_anim_percent;
+        else if (recoil_anim_percent > 1 && recoil_anim_percent <= 2)
+            this.currentRecoilOffset = recoil_anim_offset - (recoil_anim_offset * (recoil_anim_percent - 1));
+        else
+            this.currentRecoilOffset = 0;
     }
 
-    shoot(pos, rot, scale) {
-        if (this.timer < this.interval) return null;
+    shoot(pos, rot, scale, reloadFactor, bulletSpeedFactor) {
+        if (this.timer < this.interval * reloadFactor) return null;
         this.timer = 0;
+
+        this.scale = scale;
         
         const projectile = this.projectile.createClone(this.onServer);
         projectile.targetRadius *= scale;
@@ -103,8 +126,8 @@ export default class Cannon {
         };
         
         projectile.velocity = {
-            x: this.shootSpeed * Math.cos(direction),
-            y: this.shootSpeed * Math.sin(direction)
+            x: this.shootSpeed * bulletSpeedFactor * Math.cos(direction),
+            y: this.shootSpeed * bulletSpeedFactor * Math.sin(direction)
         };
 
         projectile.rotation = direction;
@@ -116,6 +139,6 @@ export default class Cannon {
     draw(ctx, camera, scale, pos, rot, alpha) {
         const col = new Color('srgb', [0.7, 0.7, 0.7], alpha);
         const outlineCol = new Color('srgb', [0.5, 0.5, 0.5], alpha);
-        this.polygon.draw({ctx: ctx, camera: camera, scale: scale, pos: {x: this.position.x + pos.x, y: this.position.y + pos.y}, offset: this.offset, rot: this.rotation + rot, color: col, outlineColor: outlineCol});
+        this.polygon.draw({ctx: ctx, camera: camera, scale: scale, pos: {x: this.position.x + pos.x, y: this.position.y + pos.y}, offset: {x: this.offset.x - this.currentRecoilOffset, y: this.offset.y}, rot: this.rotation + rot, color: col, outlineColor: outlineCol});
     }
 }

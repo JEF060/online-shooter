@@ -3,14 +3,27 @@ import Polygon from "./polygon.js";
 
 export default class Entity {
 
-    static PLAYER_BASE_SPEED = 3000;
     static UPDATE_TIMEOUT = 1; //If the entity hasn't been updated in this time, then it is assumed to be dead
     static POSITION_CORRECTION_SPEED = 3;
     static BOUNDARY_PUSH_POWER = 600;
     static BOUNDARY_PUSH_DST_FACTOR = 0.25;
     static HEALTH_FADE_IN_SPEED = 30;
     static HEALTH_FADE_OUT_SPEED = 15;
-    static DEAD_PLAYER_RADIUS = 128;
+    static DEAD_PLAYER_ZOOM_FACTOR = 6;
+
+    static MAX_TOTAL_SKILL_POINTS = 35;
+    static MAX_POINTS_PER_SKILL = 7;
+
+    static SKILL_INFO = [
+        {name: 'healthRegen', color: 'health-regen-color'},
+        {name: 'maxHealth', color: 'max-health-color'},
+        {name: 'bodyDmg', color: 'body-damage-color'},
+        {name: 'bulletSpeed', color: 'bullet-speed-color'},
+        {name: 'bulletHealth', color: 'bullet-health-color'},
+        {name: 'bulletDmg', color: 'bullet-damage-color'},
+        {name: 'reload', color: 'reload-color'},
+        {name: 'movementSpeed', color: 'movement-speed-color'}
+    ];
 
     static types = Object.freeze({
         NONSPECIFIED: 0,
@@ -21,9 +34,11 @@ export default class Entity {
 
     constructor({
         score = 0,
+        level = 0,
         lifetime = null,
         shooting = false,
-        position = { x: 0, y: 0 },
+        shootingSecondary = false,
+        position = {x: 0, y: 0},
         positionError = {x: 0, y: 0},
         velocity = {x: 0, y: 0},
         deltaV = {x: 0, y: 0},
@@ -45,7 +60,7 @@ export default class Entity {
         maxHealth = 1,
         health = null,
         healthRegenSpeed = 1,
-        healthRegenDelay = 3,
+        healthRegenDelay = 10,
         showHealth = true,
         deadFlag = false,
         id,
@@ -54,13 +69,14 @@ export default class Entity {
         type = 0,
         onServer = false,
         points = [],
-        cannon = null,
+        cannons = [],
         drawLayer = 1,
         colorVals = {col: [0, 0, 0], a: 1},
         outlineColVals = {col: [0, 0, 0], a: 1},
         outlineThickness = 4
     } = {}) {
         this.score = score;
+        this.level = level;
         this.lifetime = lifetime;
         this.lifeTimer = lifetime;
 
@@ -104,11 +120,10 @@ export default class Entity {
 
         //This marks the entity for removal, at which point it will fade out and then be removed
         this.deadFlag = deadFlag;
-        this.removeFlag = deadFlag;
+        this.removeFlag = false;
         this.fadeTimer = 0;
-        this.fadeLength = 0.2;
+        this.fadeLength = 0.12;
         this.fadeGrowFactor = 0.25;
-        if (onServer) this.fadeLength = 2; //On the server objects wait longer to be destroyed so that deadFlag has a bigger window in which it can be sent to clients
 
         this.drawLayer = drawLayer;
         this.colorVals        = colorVals;
@@ -128,7 +143,7 @@ export default class Entity {
             //These are actual color objects, which can't be sent between client and server, so they must be constructed on the client
             this.color        = new Color('oklch', colorVals.col, colorVals.a);
             this.outlineColor = new Color('oklch', outlineColVals.col, outlineColVals.a);
-            this.healthBGCol =  new Color('srgb', [0.2, 0.2, 0.2], 0);
+            this.healthBGCol =  new Color('srgb', [0.15, 0.15, 0.15], 0);
             this.healthCol =    new Color('srgb', [0.1, 1, 0.1], 0);
 
             //If there are no points then simply use a basic circle and don't construct a polygon
@@ -137,6 +152,7 @@ export default class Entity {
 
         if (onServer) {
             this.shooting = shooting; //Only server is responsible for shooting cannons
+            this.shootingSecondary = shootingSecondary;
             this.fullBroadcastPlayerIDs = []; //Stores a list of player ids that have received the full update package. They are removed from the list if the entity leaves the player's viewport
         }
 
@@ -146,21 +162,37 @@ export default class Entity {
         this.id = id ? String(id) : Entity.#makeid(5);
         this.owner = owner;
 
-        this.cannon = null;
-        if (cannon) {
-            this.cannon = new Cannon({onServer: onServer, ...cannon});
+        this.cannons = cannons;
+        for (let i = 0; i < this.cannons.length; i++) {
+            this.cannons[i] = new Cannon({onServer: onServer, ...this.cannons[i]});
 
             if (this.owner == null)
-                this.cannon.projectile.owner = this.id;
+                this.cannons[i].projectile.owner = this.id;
             else
-                this.cannon.projectile.owner = this.owner;
+                this.cannons[i].projectile.owner = this.owner;
+        }
+
+        this.skillPointsAvailable = 0;
+        this.skillPointsUsed = 0;
+
+        this.skills = {};
+        for (let i = 0; i < Entity.SKILL_INFO.length; i++) {
+            this.skills[Entity.SKILL_INFO[i].name] = {
+                level: 0,
+                completion: 0
+            }
         }
     }
 
     //Returns an object full of all information about the entity that would need to be transmitted from server to client
     getFullUpdatePackage() {
+        let cannons = [];
+        for (const cannon of this.cannons)
+            cannons.push(cannon.getFullUpdatePackage());
+
         return {
             score: this.score,
+            level: this.level,
             lifetime: this.lifetime,
             position: this.position,
             positionError: this.positionError,
@@ -192,26 +224,34 @@ export default class Entity {
             name: this.name,
             type: this.type,
             points: this.points,
-            cannon: this.cannon ? this.cannon.getFullUpdatePackage() : null,
+            cannons: cannons,
             drawLayer: this.drawLayer,
             colorVals: this.colorVals,
             outlineColVals: this.outlineColVals,
-            outlineThickness: this.outlineThickness
+            outlineThickness: this.outlineThickness,
+            skills: this.skills
         };
     }
 
     //Returns only information that needs to be updated
     getPartialUpdatePackage() {
+        let cannonData = [];
+        for (let i = 0; i < this.cannons.length; i++)
+            cannonData[i] = this.cannons[i].getPartialUpdatePackage();
+
         return {
             score: this.score,
+            level: this.level,
             position: this.position,
             velocity: this.velocity,
             acceleration: this.acceleration,
             lookTarget: this.lookTarget,
             health: this.health,
+            maxHealth: this.maxHealth,
             deadFlag: this.deadFlag,
-            cannonData: this.cannon ? this.cannon.getPartialUpdatePackage() : null,
+            cannonData: cannonData,
             id: this.id,
+            skills: this.skills
         };
     }
 
@@ -221,6 +261,7 @@ export default class Entity {
         data.onServer = onServer;
         data.lifetime = this.lifetime;
         data.shooting = this.shooting;
+        data.shootingSecondary = this.shootingSecondary;
         data.deltaV = {x: 0, y: 0};
 
         return new Entity(data);
@@ -234,7 +275,10 @@ export default class Entity {
         deadFlag,
         cannonData,
         health,
-        score
+        maxHealth,
+        score,
+        level,
+        skills
     } = {}) {
 
         //This update should be sent by server to client, not other way around
@@ -247,14 +291,18 @@ export default class Entity {
             this.positionError.y = position.y - this.position.y;
         }
 
-        if (cannonData && this.cannon) this.cannon.serverUpdate(cannonData);
+        if (cannonData) for (let i = 0; i < cannonData.length; i++)
+            this.cannons[i].serverUpdate(cannonData[i]);
 
         if (score !== null) this.score = score;
+        if (level !== null) this.level = level;
         if (velocity !== null) this.velocity = velocity;
         if (acceleration !== null) this.acceleration = acceleration;
         if (lookTarget !== null) this.lookTarget = lookTarget;
         if (deadFlag !== null) this.deadFlag = deadFlag;
         if (health !== null) this.health = health;
+        if (maxHealth !== null) this.maxHealth = maxHealth;
+        if (skills !== null) this.skills = skills;
     }
 
     //This should be used instead of externally modifying health variable
@@ -288,7 +336,12 @@ export default class Entity {
                 this.deadFlag = true;
         }
 
-        if (this.cannon) this.cannon.update(deltaTime);
+        //Used for testing
+        if (this.boostScore)
+            this.score += 10000 * deltaTime;
+
+        for (const cannon of this.cannons)
+            cannon.update(deltaTime);
 
         //Used for delivering recoil over time instead of instantaneous
         //-----------------------------------------------------------------------------------------
@@ -300,10 +353,6 @@ export default class Entity {
         this.velocity.y += this.deltaV.y * deltaVFraction;
         this.deltaV.y -= this.deltaV.y * deltaVFraction;
         //-----------------------------------------------------------------------------------------
-
-        //Update target radius based on score if entity is a player
-        if (this.type == Entity.types.PLAYER)
-            this.targetRadius = this.baseRadius * (1 + 0.14 * Math.log(this.score * 0.15 + 1));
 
         //Smoothly change radius
         //This must happen before destroy animation so it does not interfere with radius lerp during destruction
@@ -403,9 +452,13 @@ export default class Entity {
         if (this.healthRegenTimer < this.healthRegenDelay)
             this.healthRegenTimer += deltaTime;
         else {
-            this.health += this.healthRegenSpeed * deltaTime;
+            this.health += this.healthRegenSpeed * this.maxHealth * deltaTime;
             if (this.health > this.maxHealth)
                 this.health = this.maxHealth;
+        }
+
+        for (const [skillName, skillData] of Object.entries(this.skills)) {
+            skillData.completion = skillData.level / Entity.MAX_POINTS_PER_SKILL;
         }
 
         if (!this.isOnServer) {
@@ -417,7 +470,7 @@ export default class Entity {
             if (this.deltaHealthDisp < 0 && this.deltaHealthDisp < this.health - this.healthDisplay) this.deltaHealthDisp = this.health - this.healthDisplay;
             this.healthDisplay += this.deltaHealthDisp / 2;
 
-            const showHealth = this.healthDisplay + 0.01 < this.maxHealth;
+            const showHealth = this.healthDisplay < this.maxHealth * 0.99;
 
             if (showHealth) {
                 this.healthBGCol.alpha = 1 - ((1 - this.healthBGCol.alpha) / (1 + Entity.HEALTH_FADE_IN_SPEED * deltaTime));
@@ -438,8 +491,8 @@ export default class Entity {
 
         const scale = this.radius / this.baseRadius;
 
-        if (this.cannon)
-            this.cannon.draw(ctx, camera, scale, this.position, this.rotation, this.color.alpha);
+        for (let i = 0; i < this.cannons.length; i++)
+            this.cannons[i].draw(ctx, camera, scale, this.position, this.rotation, this.color.alpha);
 
         if (this.polygon)
             this.polygon.draw({ctx: ctx, camera: camera, scale: scale, pos: this.position, rot: this.rotation, color: this.color, outlineColor: this.outlineColor});
@@ -471,10 +524,10 @@ export default class Entity {
 
         ctx.lineCap = "round";
         ctx.strokeStyle = this.healthBGCol;
-        ctx.lineWidth = 8 * camera.zoom
+        ctx.lineWidth = Math.max(8 * Math.sqrt(camera.zoom), 4)
 
         const healthYPos = adjustedPosition.y + adjustedRadius + ctx.lineWidth;
-        const healthXOffset = adjustedRadius * 0.9;
+        const healthXOffset = adjustedRadius * 0.8;
         const healthLeft = adjustedPosition.x - healthXOffset;
         const healthRight = adjustedPosition.x + healthXOffset;
         const healthWidth = healthRight - healthLeft;
@@ -486,7 +539,7 @@ export default class Entity {
         ctx.closePath();
 
         ctx.strokeStyle = this.healthCol;
-        ctx.lineWidth = 4 * camera.zoom
+        ctx.lineWidth *= 0.5
 
         ctx.beginPath();
         ctx.moveTo(healthLeft, healthYPos);
@@ -496,41 +549,59 @@ export default class Entity {
     }
 
     drawName(ctx, camera) {
+        if (!this.name) return;
 
         let adjustedPosition = camera.worldToScreen(this.position);
         let adjustedRadius = (this.radius - this.outlineThickness / 2) * camera.zoom;
         if (adjustedRadius < 0) adjustedRadius = 0;
 
-        if (this.name) {
-            ctx.fillStyle = new Color('srgb', [0.98, 0.98, 0.98], this.color.alpha);
-            ctx.strokeStyle = new Color('srgb', [0.20, 0.20, 0.20], this.color.alpha);
-            ctx.lineWidth = 3;
-            ctx.font = "500 20px Poppins";
-            ctx.letterSpacing = "1px";
-            ctx.textAlign = 'center';
+        const fontSize = Math.max(3.5 * Math.sqrt(adjustedRadius) + 2, 12);
 
-            const namePos = {x: adjustedPosition.x, y: adjustedPosition.y - adjustedRadius - 10};
+        ctx.fillStyle = new Color('oklch', [1, 0, 0], this.color.alpha);
+        ctx.strokeStyle = new Color('oklch', [0.35, 0, 0], this.color.alpha);
+        ctx.lineWidth = fontSize * 0.2;
+        ctx.font = `500 ${fontSize}px Poppins`;
+        ctx.letterSpacing = "0.5px";
+        ctx.textAlign = 'center';
+        
+        const namePos = {x: adjustedPosition.x, y: adjustedPosition.y - adjustedRadius - fontSize};
 
-            ctx.beginPath();
-            ctx.strokeText(this.name, namePos.x, namePos.y);
-            ctx.fillText(this.name, namePos.x, namePos.y);
-            ctx.closePath();
-        }
+        ctx.beginPath();
+        ctx.strokeText(this.name, namePos.x, namePos.y);
+        ctx.fillText(this.name, namePos.x, namePos.y);
+        ctx.closePath();
     }
 
     shoot() {
-        if (!this.cannon || this.deadFlag) return null;
+        if (this.deadFlag) return null;
 
-        const shootData = this.cannon.shoot(this.position, this.rotation, this.radius / this.baseRadius);
-        
-        if (shootData) {
-            this.deltaV.x += shootData.recoil.x;
-            this.deltaV.y += shootData.recoil.y;
+        let projectiles = [];
 
-            shootData.projectile.drawLayer = this.drawLayer + 1;
+        for (const cannon of this.cannons) {
+            if (cannon.secondary) {
+                if (!this.shootingSecondary) continue;
+            } else {
+                if (!this.shooting) continue;
+            }
+
+            const shootData = cannon.shoot(this.position, this.rotation, this.radius / this.baseRadius, 1 - 0.5 * this.skills['reload'].completion, 1 + 1.5 * this.skills['bulletSpeed'].completion);
+            
+            if (shootData) {
+
+                shootData.projectile.contactDamage *= this.levelDmgFactor * (1 + 2 * this.skills['bulletDmg'].completion);
+                shootData.projectile.maxHealth *= 1 + 2 * this.skills['bulletHealth'].completion;
+                shootData.projectile.health = shootData.projectile.maxHealth;
+
+                projectiles.push(shootData.projectile);
+
+                this.deltaV.x += shootData.recoil.x;
+                this.deltaV.y += shootData.recoil.y;
+    
+                shootData.projectile.drawLayer = this.drawLayer + 1;
+            }
         }
         
-        return shootData ? shootData.projectile : null;
+        return projectiles;
     }
 
     //Generates a random alphanumeric id

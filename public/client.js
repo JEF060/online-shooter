@@ -11,11 +11,128 @@ const play_button = document.getElementById('play-button');
 const gamemode_select = document.getElementById('gamemode-select');
 const username_input = document.getElementById('username-input');
 
+const hud = document.getElementById('hud');
+const hudDisplay = hud.style.display;
+const username_text = document.getElementById('username-text');
+const score_text = document.getElementById('score-text');
+const progress_fill = document.getElementById('progress-fill');
+const level_text = document.getElementById('level-text');
+hud.style.display = 'none';
+
 const respawn_interface = document.getElementById('respawn-interface');
 const respawnInterfaceDisplay = respawn_interface.style.display;
 const respawn_button = document.getElementById('respawn-button');
 const back_button = document.getElementById('back-button');
 respawn_interface.style.display = 'none';
+
+
+const MAX_POINTS_PER_SKILL = Entity.MAX_POINTS_PER_SKILL;
+
+const skill_menu = document.getElementById('skill-menu');
+const skill_menu_hover_area = document.getElementById('skill-menu-hover-area');
+const skill_bars = skill_menu.getElementsByClassName('skill-bar');
+
+const points_available_text = document.getElementById('points-available-text');
+const points_used_text = document.getElementById('points-used-text');
+
+let pointsAvailable = 0;
+let lastPointsAvailable = 0;
+
+for (let i = 0; i < skill_bars.length; i++) {
+
+    const skill_bar = skill_bars[i];
+    const upgrade_btn = skill_bar.querySelector(".upgrade-button");
+    const skill_area = skill_bar.querySelector(".skill-left").querySelector(".skill-area");
+
+    const color = Entity.SKILL_INFO[i].color;
+    
+    upgrade_btn.addEventListener('click', function(event) {
+
+        if (!localPlayerEntity)
+            return;
+
+        if (!localPlayerEntity.skillPointsAvailable > 0)
+            return;
+
+        if (skill_area.childElementCount >= MAX_POINTS_PER_SKILL)
+            return;
+
+        socket.emit('upgrade skill', {skillName: Entity.SKILL_INFO[i].name});
+
+        localPlayerEntity.skillPointsAvailable--;
+        localPlayerEntity.skillPointsUsed++;
+        localPlayerEntity.skills[Entity.SKILL_INFO[i].name].level++;
+
+        const newSegment = document.createElement("div");
+        const skillAreaStyle = window.getComputedStyle(skill_area);
+
+        newSegment.style.width = 'calc(' + (100 / Entity.MAX_POINTS_PER_SKILL) + '% - ' + skillAreaStyle.gap + ')';
+        newSegment.classList.add("skill-segment");
+        newSegment.classList.add(color);
+        if (skill_area.childElementCount == 0)
+            newSegment.classList.add("left-rounded"); 
+
+        skill_area.append(newSegment);
+
+        updateSkillPointsText();
+
+        if (skill_area.childElementCount >= MAX_POINTS_PER_SKILL) 
+            upgradeButtonMakeUnselectable();
+    });
+    
+    upgrade_btn.addEventListener("mouseover", function(event) {
+        if (skill_area.childElementCount >= MAX_POINTS_PER_SKILL)
+            return;
+
+        if (!localPlayerEntity || localPlayerEntity && (localPlayerEntity.skillPointsAvailable <= 0)) {
+            upgradeButtonMakeUnselectable();
+            return;
+        }
+
+        //Creates a temporary element in order to access the original color of the upgrade button
+        const tempElement = document.createElement('div');
+        tempElement.classList.add(color);
+        document.body.appendChild(tempElement);
+        const tempStyle = window.getComputedStyle(tempElement);
+        document.body.removeChild(tempElement);
+
+        upgrade_btn.style.filter = "brightness(120%)";
+        upgrade_btn.style.cursor = "pointer";
+        upgrade_btn.style.backgroundColor = tempStyle.color;
+    });
+    
+    upgrade_btn.addEventListener("mouseout", upgradeButtonUnhover);
+
+    function upgradeButtonUnhover() {
+        upgrade_btn.style.filter = "brightness(100%)";
+        upgrade_btn.style.cursor = "auto";
+    }
+
+    function upgradeButtonMakeUnselectable() {
+        upgradeButtonUnhover();
+        
+        upgrade_btn.style.backgroundColor = 'rgb(148, 148, 148)';
+    }
+}
+
+function updateSkillPointsText() {
+    const pointsAvailable = localPlayerEntity ? localPlayerEntity.skillPointsAvailable : 0;
+    points_available_text.textContent = pointsAvailable + ' point' + (pointsAvailable != 1 ? 's' : '') + ' available';
+
+    const pointsUsed = localPlayerEntity ? localPlayerEntity.skillPointsUsed : 0;
+    points_used_text.textContent = 'Points used: ' + pointsUsed + '/' + Entity.MAX_TOTAL_SKILL_POINTS;
+}
+
+let skillMenuHovered = false;
+
+skill_menu_hover_area.addEventListener('mouseover', (e) => {
+    skillMenuHovered = true;
+});
+
+skill_menu_hover_area.addEventListener('mouseout', (e) => {
+    skillMenuHovered = false;
+});
+
 
 const fpsText = document.getElementById('fps');
 const pingText = document.getElementById('ping');
@@ -43,6 +160,10 @@ let mouseWorldPos = {x: 0, y: 0}
 let lastMouseWorldPos = {x: 0, y: 0}
 let mouseDown = false;
 let lastMouseDown = false;
+let mouseRightDown = false;
+let lastMouseRightDown = false;
+
+let lastNDown = false;
 
 //Used for calculating delta time
 let deltaTime;
@@ -80,8 +201,11 @@ socket.on('room joined', (roomID, name) => {
 
     localRoomID = roomID;
     username = name;
+
     play_interface.style.display = 'none';
     respawn_interface.style.display = 'none';
+    hud.style.display = hudDisplay;
+    username_text.textContent = username;
 
     console.log('Joined ' + roomID);
 });
@@ -155,6 +279,44 @@ function drawBoundaries(color, boundDst) {
     ctx.closePath();
 }
 
+function drawMinimap({sideLength, margin, opacity}) {
+    ctx.fillStyle = new Color('oklch', [0.9, 0, 0], opacity);
+    ctx.strokeStyle = new Color('oklch', [0.6, 0, 0], opacity);
+    ctx.lineWidth = 6;
+
+    const startPos = {
+        x: canvas.width - sideLength - margin,
+        y: canvas.height - sideLength - margin
+    };
+
+    ctx.save();
+
+    ctx.beginPath();
+    ctx.rect(startPos.x, startPos.y, sideLength, sideLength);
+    ctx.clip();
+    ctx.fill();
+    ctx.stroke();
+    ctx.closePath();
+    
+    ctx.fillStyle = new Color('oklch', [0.75, 0, 0], opacity);
+
+    ctx.beginPath();
+    ctx.rect(startPos.x + ((-2 * camera.position.x + localRoom.size) / (2 * localRoom.size)) * sideLength, startPos.y + ((-2 * camera.position.y + localRoom.size) / (2 * localRoom.size)) * sideLength, canvas.width / camera.zoom / (localRoom.size) * sideLength, canvas.height / camera.zoom / (localRoom.size) * sideLength);
+    ctx.fill();
+    ctx.closePath();
+
+    if (localPlayerEntity) {
+        ctx.fillStyle = new Color('oklch', [0, 0, 0], 1);
+        ctx.beginPath();
+        const radius = 2;
+        ctx.arc(startPos.x + ((2 * localPlayerEntity.position.x + localRoom.size) / (2 * localRoom.size)) * sideLength, startPos.y + ((2 * localPlayerEntity.position.y + localRoom.size) / (2 * localRoom.size)) * sideLength, radius, 0, 2 * Math.PI, false);    
+        ctx.fill();
+        ctx.closePath();
+    }
+
+    ctx.restore();
+}
+
 function draw() {
     ctx.fillStyle = new Color('oklch', [.975, 0, 0], 1);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -162,8 +324,21 @@ function draw() {
     drawGrid(new Color('oklch', [.8, 0, 0], 1), 32, 1);
     drawBoundaries(new Color('srgb', [0, 0, 0], 0.15), localRoom.size / 2);
     
-    if (localPlayerEntity) localPlayerEntity.drawLayer = 0;
+    if (localPlayerEntity) {
+        localPlayerEntity.drawLayer = 0;
+        localPlayerEntity.name = null;
+    }
     localRoom.drawEntities(ctx, camera, canvas);
+
+    drawMinimap({sideLength: 180, margin: 16, opacity: 0.5});
+}
+
+function increaseLevelProgress(amount) {
+    let tempLevel = Math.floor(levelProgress);
+    levelProgress += amount;
+
+    if (Math.floor(levelProgress) != tempLevel && Math.floor(levelProgress) < Math.floor(targetLevelProgress))
+        levelProgress += Math.floor(targetLevelProgress) - Math.floor(levelProgress);
 }
 
 function gameLoop(timeStamp) {
@@ -178,22 +353,92 @@ function gameLoop(timeStamp) {
 
     localRoom.updateEntities(deltaTime, camera, canvas);
 
+    if (localPlayerEntity)
+        pointsAvailable = localPlayerEntity.skillPointsAvailable;
+
     camera.update(deltaTime, canvas);
 
     playersText.textContent = "players: " + localRoom.getNumberOfPlayers();
     entitiesText.textContent = "entities: " + localRoom.getNumberOfEntities();
+    updateSkillPointsText();
+
+    if (pointsAvailable <= 0 && !skillMenuHovered) {
+        skill_menu.style.transitionDelay = '0.5s';
+        skill_menu.style.transitionDuration = '0.65s';
+        skill_menu.style.transitionTimingFunction = 'ease-in';
+        skill_menu.style.left = 'calc(-16px - ' + window.getComputedStyle(skill_menu).width + ')';
+    } else {
+        skill_menu.style.transitionDelay = '0s';
+        skill_menu.style.transitionDuration = '0.4s';
+        skill_menu.style.transitionTimingFunction = 'ease-out';
+        skill_menu.style.left = '16px';
+    }
+
+    if (pointsAvailable != lastPointsAvailable) {
+
+        if (pointsAvailable <= 0) {
+            points_available_text.style.transitionDelay = '0.5s';
+            points_available_text.style.transitionDuration = '0.5s';
+            points_available_text.style.opacity = '0%';
+        } else {
+            points_available_text.style.transitionDelay = '0s';
+            points_available_text.style.transitionDuration = '0s';
+            points_available_text.style.opacity = '100%';
+        }
+
+        for (let i = 0; i < skill_bars.length; i++) {
+
+            const skill_bar = skill_bars[i];
+            const upgrade_btn = skill_bar.querySelector(".upgrade-button");
+            const skill_area = skill_bar.querySelector(".skill-left").querySelector(".skill-area");
+        
+            const color = Entity.SKILL_INFO[i].color;
+
+            if (pointsAvailable <= 0) {
+
+                upgrade_btn.style.filter = "brightness(100%)";
+                upgrade_btn.style.cursor = "auto";
+                upgrade_btn.style.backgroundColor = 'rgb(148, 148, 148)';
+
+            } else if (skill_area.childElementCount < MAX_POINTS_PER_SKILL) {
+
+                //Creates a temporary element in order to access the original color of the upgrade button
+                const tempElement = document.createElement('div');
+                tempElement.classList.add(color);
+                document.body.appendChild(tempElement);
+                const tempStyle = window.getComputedStyle(tempElement);
+                document.body.removeChild(tempElement);
+                
+                upgrade_btn.style.backgroundColor = tempStyle.color;
+            }
+        }
+    }
+
+    lastPointsAvailable = localPlayerEntity ? localPlayerEntity.skillPointsAvailable : -1;
 
     if (localPlayerEntity) {
 
-        camera.setTargetZoom(canvas, (!localPlayerEntity.deadFlag ? localPlayerEntity.targetRadius : Entity.DEAD_PLAYER_RADIUS) / localPlayerEntity.baseRadius);
+        score_text.textContent = 'Score: ' + Math.floor(localPlayerEntity.score);
+        progress_fill.style.width = (((localPlayerEntity.level - Math.floor(localPlayerEntity.level)) % 1) * 100) + '%';
+        level_text.textContent = 'Level ' + Math.floor(localPlayerEntity.level);
+
+        camera.setTargetZoom(canvas, !localPlayerEntity.deadFlag ? localPlayerEntity.targetRadius / localPlayerEntity.baseRadius : Entity.DEAD_PLAYER_ZOOM_FACTOR);
         camera.setCenterTarget(localPlayerEntity.position);
 
         mouseWorldPos = camera.screenToWorld(mousePos);
 
-        if (mouseDown != lastMouseDown) {
+        if (mouseDown != lastMouseDown)
             inputUpdates.mouseDown = mouseDown;
-        }
         lastMouseDown = mouseDown;
+
+        if (mouseRightDown != lastMouseRightDown)
+            inputUpdates.mouseRightDown = mouseRightDown;
+        lastMouseRightDown = mouseRightDown;
+
+        const nDown = keyPressed("n");
+        if (nDown != lastNDown)
+            inputUpdates.boostScore = nDown;
+        lastNDown = nDown;
 
         //Calculates vector to move along based on wasd input, normalizes it, and raises update input flag if wasd vector input has changed
         const input = {x: keyPressed("d") - keyPressed("a"), y: keyPressed("s") - keyPressed("w")};
@@ -215,8 +460,8 @@ function gameLoop(timeStamp) {
             lastMouseWorldPos = mouseWorldPos;
         }
 
-        localPlayerEntity.acceleration.x = input.x * Entity.PLAYER_BASE_SPEED;
-        localPlayerEntity.acceleration.y = input.y * Entity.PLAYER_BASE_SPEED;
+        localPlayerEntity.acceleration.x = input.x * localPlayerEntity.movementSpeed * (1 + 0.75 * localPlayerEntity.skills['movementSpeed'].completion);
+        localPlayerEntity.acceleration.y = input.y * localPlayerEntity.movementSpeed * (1 + 0.75 * localPlayerEntity.skills['movementSpeed'].completion);
         localPlayerEntity.lookTarget = mouseWorldPos;
 
         lastInput = structuredClone(input);
@@ -232,8 +477,16 @@ function gameLoop(timeStamp) {
 
     if (playerDied) {
         respawn_interface.style.display = respawnInterfaceDisplay;
-        
+        hud.style.display = 'none';
         playerDied = false;
+
+        //Remove all of the skill segments from the upgrade area
+        for (let i = 0; i < skill_bars.length; i++) {
+            const skill_bar = skill_bars[i];
+            const skill_area = skill_bar.querySelector(".skill-left").querySelector(".skill-area");
+
+            skill_area.innerHTML = '';
+        }
     }
 
     inputUpdateTimer += deltaTime;
@@ -260,13 +513,62 @@ window.addEventListener('load', resizeCanvas);
 window.addEventListener('resize', resizeCanvas);
 
 //Used to update mouse information
-addEventListener('mousedown',   ()      => { mouseDown = true; });
-addEventListener('mouseup',     ()      => { mouseDown = false; });
-addEventListener('mousemove',   (event) => { mousePos = {x: event.clientX, y: event.clientY}; });
+//----------------------------------------
+addEventListener('mousedown', (event) => {
+    if (event.button == 0)
+        mouseDown = true;
+    
+    if (event.button == 2)
+        mouseRightDown = true;
+});
+
+addEventListener('mouseup', (event) => {
+    if (event.button == 0)
+        mouseDown = false;
+    
+    if (event.button == 2)
+        mouseRightDown = false;
+});
+
+addEventListener('mousemove', (event) => {
+    mousePos = {
+        x: event.clientX,
+        y: event.clientY
+    };
+});
+//----------------------------------------
 
 //Used for keeping track of keyboard input
-document.addEventListener('keydown', (event) => { pressedKeys[event.key] = true; });
-document.addEventListener('keyup', (event) => { pressedKeys[event.key] = false; });
-function keyPressed(code) { if (pressedKeys[code] != null) { return pressedKeys[code]; } else { return false; } }
+//-----------------------------------------------
+document.addEventListener('keydown', (event) => {
+
+    if ((event.ctrlKey || event.metaKey) && (event.key === '+' || event.key === '-' || event.key === '=')) {
+        event.preventDefault();
+    }
+
+    pressedKeys[event.key] = true;
+});
+
+document.addEventListener('keyup', (event) => {
+    pressedKeys[event.key] = false;
+});
+
+function keyPressed(code) {
+    if (pressedKeys[code] != null)
+        return pressedKeys[code];
+    else 
+        return false;
+}
+//-----------------------------------------------
+
+// Prevent the right-click menu on the canvas
+document.addEventListener('contextmenu', event => event.preventDefault());
+
+//Prevent zooming
+document.addEventListener('wheel', (event) => {
+    if (event.ctrlKey) {
+        event.preventDefault();
+    }
+}, { passive: false });
 
 gameLoop();
