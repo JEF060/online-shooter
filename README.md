@@ -1,5 +1,5 @@
 # online-shooter
-This game is a recreation/clone of diep.io that I made for my own learning experience. I intend to add features to differentiate my game from its predecessor, but at the moment it is very basic. It features fully-functioning multiplayer, and is meant to be played with other people.
+This game is a recreation/clone of [diep.io](https://diep.io/) that I made for my own learning experience. I intend to add features to differentiate my game from its predecessor, but at the moment it is very basic. It features fully-functioning multiplayer, and is meant to be played with other people.
 
 Someday I may purchase a domain and a web server so that you can play with anyone across the world by simply going to some website, instead of needing to set up your own server than only extends across your local network. Doing that would cost some money, though.
 
